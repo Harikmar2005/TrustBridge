@@ -1,0 +1,6 @@
+{
+  "name": "TRUSTBRIDGE - Marketplace Trust & Resolution Platform",
+  "description": "AI-powered multilingual marketplace trust and dispute resolution platform with real-time Nexconn chat, explainable scam detection, and smart agent escalation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
