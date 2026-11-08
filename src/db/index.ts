@@ -94,7 +94,9 @@ export function initializeDatabase(): void {
       confidence_score REAL NOT NULL DEFAULT 0.85,
       is_flagged INTEGER NOT NULL DEFAULT 0,
       is_false_positive INTEGER NOT NULL DEFAULT 0,
-      timestamp TEXT NOT NULL
+      timestamp TEXT NOT NULL,
+      delivery_status TEXT DEFAULT 'DELIVERED_LOCAL',
+      nexconn_message_id TEXT
     );
 
     -- Disputes table
@@ -207,4 +209,19 @@ export function initializeDatabase(): void {
     CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp ON audit_logs(timestamp);
     CREATE INDEX IF NOT EXISTS idx_auth_sessions_token ON auth_sessions(token_id);
   `);
+
+  // Safe schema migrations for existing SQLite databases
+  try {
+    const cols = db.pragma('table_info(messages)') as Array<{ name: string }>;
+    const colNames = new Set(cols.map((c) => c.name));
+    if (!colNames.has('delivery_status')) {
+      db.exec(`ALTER TABLE messages ADD COLUMN delivery_status TEXT DEFAULT 'DELIVERED_LOCAL'`);
+    }
+    if (!colNames.has('nexconn_message_id')) {
+      db.exec(`ALTER TABLE messages ADD COLUMN nexconn_message_id TEXT`);
+    }
+  } catch (migErr) {
+    console.warn('[DB Migration] Notice checking message columns:', migErr);
+  }
 }
+

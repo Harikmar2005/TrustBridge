@@ -574,12 +574,14 @@ app.get('/api/conversations/:id/messages', (req: Request, res: Response) => {
       isFlagged: Boolean(m.is_flagged),
       isFalsePositive: Boolean(m.is_false_positive),
       timestamp: m.timestamp,
+      deliveryStatus: m.delivery_status || 'DELIVERED_LOCAL',
+      nexconnMessageId: m.nexconn_message_id || null,
     }))
   );
 });
 
 app.post('/api/messages/send', messageLimiter, async (req: Request, res: Response) => {
-  const { conversationId, senderId, content, language } = req.body;
+  const { conversationId, senderId, content, language, deliveryStatus: requestedDeliveryStatus, nexconnMessageId: requestedNexconnMessageId } = req.body;
   if (!conversationId || !senderId || !content || !content.trim()) {
     return res.status(400).json({ error: 'Missing required message parameters' });
   }
@@ -598,6 +600,8 @@ app.post('/api/messages/send', messageLimiter, async (req: Request, res: Respons
   const messageId = `msg_${Date.now()}`;
   const now = new Date().toISOString();
   const isFlagged = analysis.riskScore >= 60;
+  const deliveryStatus = requestedDeliveryStatus === 'DELIVERED_CLOUD' ? 'DELIVERED_CLOUD' : 'DELIVERED_LOCAL';
+  const nexconnMessageId = requestedNexconnMessageId || null;
 
   const insertMsgTxn = db.transaction(() => {
     db.prepare(`
@@ -605,8 +609,9 @@ app.post('/api/messages/send', messageLimiter, async (req: Request, res: Respons
         id, conversation_id, sender_id, sender_name, sender_role,
         content, language, translations_json, risk_score, risk_category,
         detected_indicators_json, recommended_action, detection_engine,
-        confidence_score, is_flagged, is_false_positive, timestamp
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        confidence_score, is_flagged, is_false_positive, timestamp,
+        delivery_status, nexconn_message_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       messageId,
       conversationId,
@@ -624,7 +629,9 @@ app.post('/api/messages/send', messageLimiter, async (req: Request, res: Respons
       analysis.confidenceScore,
       isFlagged ? 1 : 0,
       0,
-      now
+      now,
+      deliveryStatus,
+      nexconnMessageId
     );
 
     // Update conversation timestamp
@@ -691,7 +698,24 @@ app.post('/api/messages/send', messageLimiter, async (req: Request, res: Respons
     isFlagged,
     isFalsePositive: false,
     timestamp: now,
+    deliveryStatus,
+    nexconnMessageId,
   });
+});
+
+// Acknowledge read receipt in database
+app.patch('/api/messages/:id/read', (req: Request, res: Response) => {
+  const result = db.prepare(`
+    UPDATE messages
+    SET delivery_status = 'READ'
+    WHERE id = ? OR nexconn_message_id = ?
+  `).run(req.params.id, req.params.id);
+
+  if (result.changes === 0) {
+    return res.status(404).json({ error: 'Message not found' });
+  }
+
+  res.json({ success: true, messageId: req.params.id, deliveryStatus: 'READ' });
 });
 
 app.post('/api/messages/:id/false-positive', (req: Request, res: Response) => {
@@ -1340,6 +1364,14 @@ async function startServer() {
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`[TrustBridge] Server running on http://0.0.0.0:${PORT}`);
     console.log(`[TrustBridge] SQLite database persisted at: ./data/trustbridge.db`);
+
+    // Startup Nexconn configuration validation
+    const ncStatus = getNexconnConfigStatus();
+    if (ncStatus.isConfigured) {
+      console.log(`[TrustBridge] Nexconn Cloud configuration: CONFIGURED (Area: SG, Endpoint: ${ncStatus.apiUrl})`);
+    } else {
+      console.log(`[TrustBridge] Nexconn Cloud configuration: CREDENTIALS_REQUIRED (NEXCONN_APP_KEY & NEXCONN_APP_SECRET missing in environment)`);
+    }
   });
 }
 

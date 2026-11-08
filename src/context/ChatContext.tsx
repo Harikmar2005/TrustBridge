@@ -96,13 +96,38 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
     refreshMessages();
   }, [refreshMessages]);
 
-  // Listen to incoming messages over Nexconn SDK
+    // Listen to incoming messages over Nexconn SDK
   useEffect(() => {
-    const unsubscribe = nexconnService.subscribeMessages((payload) => {
+    const unsubscribeMessages = nexconnService.subscribeMessages((payload) => {
       refreshMessages();
       loadConversations();
     });
-    return () => unsubscribe();
+
+    const unsubscribeReceipts = nexconnService.subscribeReceipts((receiptEvent: any) => {
+      if (receiptEvent && receiptEvent.responses && Array.isArray(receiptEvent.responses)) {
+        const readMsgIds = new Set<string>();
+        for (const resp of receiptEvent.responses) {
+          if (resp.messageId) {
+            readMsgIds.add(resp.messageId);
+            fetch(`/api/messages/${resp.messageId}/read`, { method: 'PATCH' }).catch(() => {});
+          }
+        }
+        if (readMsgIds.size > 0) {
+          setMessages((prev) =>
+            prev.map((m) =>
+              readMsgIds.has(m.id) || (m.nexconnMessageId && readMsgIds.has(m.nexconnMessageId))
+                ? { ...m, deliveryStatus: 'READ' }
+                : m
+            )
+          );
+        }
+      }
+    });
+
+    return () => {
+      unsubscribeMessages();
+      unsubscribeReceipts();
+    };
   }, [refreshMessages, loadConversations]);
 
   // Send message
@@ -115,24 +140,38 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const lang = explicitLanguage || currentUser.preferredLanguage;
       const activeConv = conversations.find((c) => c.id === activeConversationId);
 
-      // Attempt Nexconn SDK dispatch if connected
+      let deliveryStatus: 'DELIVERED_CLOUD' | 'DELIVERED_LOCAL' = 'DELIVERED_LOCAL';
+      let nexconnMessageId: string | undefined;
+
+      // Attempt Nexconn SDK dispatch if genuinely connected
       if (activeConv && nexconnConnected) {
-        const channelType = activeConv.type === 'dispute_room' ? 'group' : 'direct';
-        const targetId =
-          activeConv.type === 'dispute_room'
-            ? activeConv.nexconnChannelId
-            : activeConv.buyerId === currentUser.id
-            ? activeConv.sellerId
-            : activeConv.buyerId;
+        const isDisputeRoom = activeConv.type === 'dispute_room';
+        const channelType = isDisputeRoom ? 'group' : 'direct';
+        const targetId = isDisputeRoom
+          ? activeConv.nexconnChannelId
+          : activeConv.buyerId === currentUser.id
+          ? activeConv.sellerId
+          : activeConv.buyerId;
+
+        // Ensure group membership for dispute room
+        if (isDisputeRoom) {
+          await nexconnService.createOrJoinGroup(
+            activeConv.nexconnChannelId,
+            activeConv.title,
+            [activeConv.buyerId, activeConv.sellerId, 'usr_support_1']
+          );
+        }
 
         const ncResult = await nexconnService.sendTextMessage(channelType, targetId, content);
-        if (ncResult.success) {
+        if (ncResult.success && ncResult.messageId) {
+          deliveryStatus = 'DELIVERED_CLOUD';
+          nexconnMessageId = ncResult.messageId;
           setNexconnDeliveryNotice(`Delivered via Nexconn Edge (Msg ID: ${ncResult.messageId})`);
         } else {
-          setNexconnDeliveryNotice(`Nexconn Edge skipped: ${ncResult.error}`);
+          setNexconnDeliveryNotice(`Nexconn Edge skipped: ${ncResult.error || 'Connection unavailable'}`);
         }
       } else {
-        setNexconnDeliveryNotice('Dispatched via TrustBridge Escrow Engine (Nexconn credentials unconfigured)');
+        setNexconnDeliveryNotice('Dispatched and persisted locally in SQLite Escrow database');
       }
 
       // Transmit to TrustBridge backend for AI Scam Detection, Multilingual Translation, and DB Persistence
@@ -147,6 +186,8 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
           senderId: currentUser.id,
           content,
           language: lang,
+          deliveryStatus,
+          nexconnMessageId,
         }),
       });
 

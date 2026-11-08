@@ -352,13 +352,18 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ onRaiseDispute, counterp
                     </div>
                   )}
 
-                  {/* Delivery Receipt */}
+                  {/* Delivery & Read Receipt Verification */}
                   <div
                     className={`mt-1 flex items-center justify-end gap-1 text-[10px] ${
                       isMe ? 'text-blue-200' : 'text-slate-400'
                     }`}
                   >
-                    {nexconnConnected ? (
+                    {msg.deliveryStatus === 'READ' ? (
+                      <>
+                        <CheckCheck className="w-3 h-3 text-cyan-300" />
+                        <span>Read via Nexconn</span>
+                      </>
+                    ) : msg.deliveryStatus === 'DELIVERED_CLOUD' ? (
                       <>
                         <CheckCheck className="w-3 h-3 text-emerald-400" />
                         <span>{t('deliveredViaNexconn', lang)}</span>

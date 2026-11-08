@@ -112,6 +112,11 @@ class NexconnChatService {
       return true;
     }
 
+    // Node.js environment safeguard (CLI tests running in Node where window is undefined)
+    if (typeof window === 'undefined') {
+      return false;
+    }
+
     // Requirement 1 & 7: Resolve and validate App Key
     const resolvedKey = (
       appKey ||
@@ -316,6 +321,49 @@ class NexconnChatService {
       this.groupChannels.set(groupId, channel);
     }
     return this.groupChannels.get(groupId)!;
+  }
+
+  /**
+   * Creates or joins a genuine group channel on Nexconn Cloud Edge
+   */
+  public async createOrJoinGroup(
+    groupId: string,
+    groupName: string,
+    inviteeUserIds: string[] = []
+  ): Promise<{ success: boolean; isNew?: boolean; error?: string }> {
+    if (!this.initialized || this.connectionState !== 'CONNECTED') {
+      return { success: false, error: 'Nexconn SDK is not connected' };
+    }
+
+    try {
+      const channel = this.getGroupChannel(groupId);
+      // Attempt joining group
+      const joinRes = await channel.join();
+      if (joinRes && joinRes.isOk) {
+        return { success: true, isNew: false };
+      }
+
+      // If group not yet registered on server, create group with members
+      const createRes = await GroupChannel.createGroup({
+        groupId,
+        groupName,
+        inviteeUserIds,
+      });
+
+      if (createRes && createRes.isOk) {
+        return { success: true, isNew: true };
+      }
+
+      return {
+        success: false,
+        error: `Group create/join returned code: ${createRes?.code || joinRes?.code || 'UNKNOWN'}`,
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: `Group channel error: ${err.message}`,
+      };
+    }
   }
 
   /**

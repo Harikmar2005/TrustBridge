@@ -17,6 +17,7 @@ export interface NexconnConfigStatus {
   appSecretConfigured: boolean;
   apiUrl: string;
   areaCode: number;
+  status: 'CONFIGURED' | 'CREDENTIALS_REQUIRED';
   notes: string;
 }
 
@@ -24,20 +25,21 @@ export interface NexconnConfigStatus {
  * Validates Nexconn environment configuration
  */
 export function getNexconnConfigStatus(): NexconnConfigStatus {
-  const appKey = process.env.NEXCONN_APP_KEY || '';
-  const appSecret = process.env.NEXCONN_APP_SECRET || '';
-  const apiUrl = process.env.NEXCONN_API_URL || 'https://api-sg.ronghub.com';
+  const appKey = process.env.NEXCONN_APP_KEY?.trim() || '';
+  const appSecret = process.env.NEXCONN_APP_SECRET?.trim() || '';
+  const apiUrl = (process.env.NEXCONN_API_URL?.trim() || 'https://api-sg.ronghub.com').replace(/\/+$/, '');
 
-  const isConfigured = Boolean(appKey.trim() && appSecret.trim());
+  const isConfigured = Boolean(appKey && appSecret);
 
   return {
     isConfigured,
-    appKeyConfigured: Boolean(appKey.trim()),
-    appSecretConfigured: Boolean(appSecret.trim()),
+    appKeyConfigured: Boolean(appKey),
+    appSecretConfigured: Boolean(appSecret),
     apiUrl,
-    areaCode: 2, // Singapore data center
+    areaCode: 2, // Singapore data center (AreaCode.SG)
+    status: isConfigured ? 'CONFIGURED' : 'CREDENTIALS_REQUIRED',
     notes: isConfigured
-      ? 'Nexconn credentials provided via environment variables.'
+      ? 'Nexconn credentials provided via backend environment variables.'
       : 'Nexconn credentials missing: Set NEXCONN_APP_KEY and NEXCONN_APP_SECRET in .env to connect to live Nexconn Cloud Edge.',
   };
 }
@@ -53,7 +55,8 @@ export async function requestNexconnUserToken(params: {
 }): Promise<NexconnTokenResponse> {
   const appKey = process.env.NEXCONN_APP_KEY?.trim();
   const appSecret = process.env.NEXCONN_APP_SECRET?.trim();
-  const apiUrl = process.env.NEXCONN_API_URL?.trim() || 'https://api-sg.ronghub.com';
+  const rawApiUrl = process.env.NEXCONN_API_URL?.trim() || 'https://api-sg.ronghub.com';
+  const apiUrl = rawApiUrl.replace(/\/+$/, '');
 
   // Strict check: Never fabricate fake tokens!
   if (!appKey || !appSecret) {
@@ -62,7 +65,7 @@ export async function requestNexconnUserToken(params: {
       code: 'NEXCONN_CREDENTIALS_REQUIRED',
       requiresCredentials: true,
       message:
-        'Live Nexconn credentials not configured. Please supply NEXCONN_APP_KEY and NEXCONN_APP_SECRET to issue genuine tokens from the Nexconn Cloud Edge.',
+        'Live Nexconn credentials not configured. Please supply NEXCONN_APP_KEY and NEXCONN_APP_SECRET in .env to issue genuine tokens from the Nexconn Cloud Edge.',
     };
   }
 
@@ -76,13 +79,11 @@ export async function requestNexconnUserToken(params: {
     .digest('hex');
 
   const formData = new URLSearchParams();
-  formData.append('userId', params.userId);
-  formData.append('name', params.name || 'User');
-  formData.append(
-    'portraitUri',
-    params.portraitUri ||
-      'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80'
-  );
+  formData.append('userId', params.userId.trim());
+  formData.append('name', (params.name || 'User').trim());
+  if (params.portraitUri) {
+    formData.append('portraitUri', params.portraitUri.trim());
+  }
 
   try {
     const res = await fetch(`${apiUrl}/user/getToken.json`, {
