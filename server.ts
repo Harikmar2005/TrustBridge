@@ -475,19 +475,29 @@ app.get('/api/nexconn/status', (_req: Request, res: Response) => {
   res.json(status);
 });
 
-// Genuine Nexconn Token Request Flow
-app.post('/api/nexconn/token', async (req: Request, res: Response) => {
-  const { userId, name } = req.body;
-  if (!userId) {
-    return res.status(400).json({ error: 'userId is required' });
+// Genuine Nexconn Token Request Flow with Session Authorization
+app.post('/api/nexconn/token', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
+  const requestingUser = req.user!;
+  const targetUserId = req.body.userId || requestingUser.userId;
+
+  // Authorization: Non-admins can only request a token for their own authenticated session
+  if (requestingUser.role !== 'admin' && requestingUser.userId !== targetUserId) {
+    return res.status(403).json({
+      error: 'FORBIDDEN',
+      message: 'You are only authorized to request Nexconn tokens for your own user account.',
+    });
   }
 
-  const user = db.prepare(`SELECT name, avatar FROM users WHERE id = ?`).get(userId) as any;
-  const userName = name || user?.name || 'User';
-  const portraitUri = user?.avatar;
+  const dbUser = db.prepare(`SELECT name, avatar FROM users WHERE id = ?`).get(targetUserId) as any;
+  if (!dbUser) {
+    return res.status(404).json({ error: 'USER_NOT_FOUND', message: 'Target user does not exist.' });
+  }
+
+  const userName = req.body.name || dbUser?.name || requestingUser.name;
+  const portraitUri = dbUser?.avatar;
 
   const result = await requestNexconnUserToken({
-    userId,
+    userId: targetUserId,
     name: userName,
     portraitUri,
   });

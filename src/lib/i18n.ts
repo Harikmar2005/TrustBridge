@@ -94,6 +94,11 @@ export const DICTIONARY = {
     ta: 'நெக்ஸ்கான் வழியாக விநியோகிக்கப்பட்டது',
     hi: 'नेक्सकॉन द्वारा वितरित',
   },
+  deliveredViaEscrowDb: {
+    en: 'Persisted to Escrow DB',
+    ta: 'எஸ்க்ரோ தரவுத்தளத்தில் சேமிக்கப்பட்டது',
+    hi: 'एस्क्रो डेटाबेस में सहेजा गया',
+  },
   trustGuardActive: {
     en: 'TrustBridge Guard Active: All messages encrypted with Nexconn and analyzed by Gemini Sentinel.',
     ta: 'டிரஸ்ட்பிரிட்ஜ் பாதுகாப்பு செயலில் உள்ளது: அனைத்து செய்திகளும் நெக்ஸ்கான் மூலம் குறியாக்கம் செய்யப்பட்டு ஜெமினி சென்டினல் மூலம் ஆய்வு செய்யப்படுகின்றன.',

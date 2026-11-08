@@ -14,6 +14,7 @@ import {
   ConnectionStatusHandler,
   LogLevel,
   AreaCode,
+  ChannelType,
 } from '@nexconn/chat';
 
 export type NexconnConnectionState =
@@ -44,6 +45,7 @@ export interface ChatMessagePayload {
 
 type MessageListener = (payload: ChatMessagePayload) => void;
 type StatusListener = (status: NexconnStatusDetail) => void;
+type ReceiptListener = (receiptEvent: any) => void;
 
 class NexconnChatService {
   private static instance: NexconnChatService;
@@ -58,8 +60,13 @@ class NexconnChatService {
 
   private messageListeners: Set<MessageListener> = new Set();
   private statusListeners: Set<StatusListener> = new Set();
+  private receiptListeners: Set<ReceiptListener> = new Set();
   private directChannels: Map<string, DirectChannel> = new Map();
   private groupChannels: Map<string, GroupChannel> = new Map();
+
+  // Deduplication cache for incoming messages
+  private processedMessageIds: Set<string> = new Set();
+  private processedMessageQueue: string[] = [];
 
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 3;
@@ -138,24 +145,26 @@ class NexconnChatService {
 
       // Register connection status handler
       try {
+        const handleStatus = (event: any) => {
+          const status = event?.status;
+          // RCConnectionStatus: 0: Connected, 1: Connecting, 2: Disconnected, 3: Suspended
+          if (status === 0) {
+            this.reconnectAttempts = 0;
+            this.updateState('CONNECTED', 'Connected to Nexconn Cloud Edge');
+          } else if (status === 1) {
+            this.updateState('RECONNECTING', 'Connecting to Nexconn...');
+          } else if (status === 3) {
+            this.updateState('RECONNECTING', 'Connection suspended. Reconnecting automatically...');
+          } else {
+            this.updateState('DISCONNECTED', `Nexconn disconnected (status: ${status})`, status);
+            this.attemptReconnect();
+          }
+        };
+
         NCEngine.addConnectionStatusHandler(
           'tb-conn-status-handler',
           new ConnectionStatusHandler({
-            onConnectionStatusChanged: (event: any) => {
-              const status = event?.status;
-              // 0: Connected, 1: Connecting, 2: Disconnected, 3: Token Incorrect
-              if (status === 0) {
-                this.reconnectAttempts = 0;
-                this.updateState('CONNECTED', 'Connected to Nexconn Cloud Edge');
-              } else if (status === 1) {
-                this.updateState('RECONNECTING', 'Reconnecting to Nexconn...');
-              } else if (status === 3) {
-                this.updateState('ERROR', 'Nexconn token expired or invalid', 3);
-              } else {
-                this.updateState('DISCONNECTED', `Nexconn status code: ${status}`, status);
-                this.attemptReconnect();
-              }
-            },
+            onConnectionStatusChanged: handleStatus,
           })
         );
       } catch (handlerErr) {
@@ -170,10 +179,25 @@ class NexconnChatService {
             onMessageReceived: ({ messages }: { messages: any[] }) => {
               if (messages && messages.length > 0) {
                 messages.forEach((msg: any) => {
+                  const msgId = msg.messageId || msg.messageUId;
+                  // Duplicate message handling
+                  if (msgId && this.processedMessageIds.has(msgId)) {
+                    return;
+                  }
+                  if (msgId) {
+                    this.trackProcessedMessageId(msgId);
+                  }
+
+                  const channelId =
+                    msg.channelIdentifier?.channelId || msg.targetId || msg.channelId || 'unknown';
+                  const isGroup =
+                    msg.channelIdentifier?.channelType === ChannelType.GROUP ||
+                    msg.conversationType === 3;
+
                   this.notifyMessageListeners({
-                    channelId: msg.targetId || msg.channelId || msg.channelIdentifier?.channelId || 'unknown',
-                    channelType: msg.conversationType === 3 ? 'group' : 'direct',
-                    messageId: msg.messageId || msg.messageUId || `nc_${Date.now()}`,
+                    channelId,
+                    channelType: isGroup ? 'group' : 'direct',
+                    messageId: msgId || `nc_${Date.now()}`,
                     content: msg.content?.text || '',
                     senderId: msg.senderUserId || '',
                     timestamp: msg.sentTime || Date.now(),
@@ -182,7 +206,7 @@ class NexconnChatService {
               }
             },
             onMessageReceiptResponse: (event: any) => {
-              console.info('[Nexconn SDK] Message read receipt acknowledged:', event);
+              this.notifyReceiptListeners(event);
             },
           })
         );
@@ -350,18 +374,23 @@ class NexconnChatService {
   }
 
   /**
-   * Sends read receipt response for a message
+   * Sends read receipt response for a message or array of messages
    */
-  public async sendReadReceipt(channelType: 'direct' | 'group', targetId: string, messageId: string): Promise<boolean> {
+  public async sendReadReceipt(
+    channelType: 'direct' | 'group',
+    targetId: string,
+    messageIds: string | string[]
+  ): Promise<boolean> {
     if (!this.initialized || this.connectionState !== 'CONNECTED') return false;
     try {
+      const ids = Array.isArray(messageIds) ? messageIds : [messageIds];
       if (channelType === 'direct') {
         const chan = this.getDirectChannel(targetId);
-        const res = await chan.sendReadReceiptResponse([messageId]);
+        const res = await chan.sendReadReceiptResponse(ids);
         return res?.isOk ?? false;
       } else {
         const chan = this.getGroupChannel(targetId);
-        const res = await chan.sendReadReceiptResponse([messageId]);
+        const res = await chan.sendReadReceiptResponse(ids);
         return res?.isOk ?? false;
       }
     } catch (e) {
@@ -411,6 +440,11 @@ class NexconnChatService {
     return () => this.messageListeners.delete(listener);
   }
 
+  public subscribeReceipts(listener: ReceiptListener): () => void {
+    this.receiptListeners.add(listener);
+    return () => this.receiptListeners.delete(listener);
+  }
+
   public subscribeStatus(listener: StatusListener): () => void {
     this.statusListeners.add(listener);
     // Emit immediate current state
@@ -420,6 +454,19 @@ class NexconnChatService {
 
   private notifyMessageListeners(payload: ChatMessagePayload) {
     this.messageListeners.forEach((fn) => fn(payload));
+  }
+
+  private notifyReceiptListeners(receipt: any) {
+    this.receiptListeners.forEach((fn) => fn(receipt));
+  }
+
+  private trackProcessedMessageId(id: string) {
+    this.processedMessageIds.add(id);
+    this.processedMessageQueue.push(id);
+    if (this.processedMessageQueue.length > 1000) {
+      const old = this.processedMessageQueue.shift();
+      if (old) this.processedMessageIds.delete(old);
+    }
   }
 
   private updateState(state: NexconnConnectionState, text: string, code?: number | string) {

@@ -8,6 +8,7 @@ import {
   ShieldAlert,
   ShieldCheck,
   CheckCheck,
+  Check,
   Search,
   Filter,
   Info,
@@ -357,8 +358,17 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ onRaiseDispute, counterp
                       isMe ? 'text-blue-200' : 'text-slate-400'
                     }`}
                   >
-                    <CheckCheck className="w-3 h-3 text-emerald-400" />
-                    <span>{t('deliveredViaNexconn', lang)}</span>
+                    {nexconnConnected ? (
+                      <>
+                        <CheckCheck className="w-3 h-3 text-emerald-400" />
+                        <span>{t('deliveredViaNexconn', lang)}</span>
+                      </>
+                    ) : (
+                      <>
+                        <Check className="w-3 h-3 text-slate-400" />
+                        <span>{t('deliveredViaEscrowDb', lang)}</span>
+                      </>
+                    )}
                   </div>
                 </div>
 

@@ -152,7 +152,7 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       if (res.ok) {
         const newMsg: Message = await res.json();
-        setMessages((prev) => [...prev, newMsg]);
+        setMessages((prev) => (prev.some((m) => m.id === newMsg.id) ? prev : [...prev, newMsg]));
         loadConversations();
         return newMsg;
       } else {

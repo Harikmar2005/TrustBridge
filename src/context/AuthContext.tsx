@@ -96,10 +96,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const statusRes = await fetch('/api/nexconn/status');
         const configInfo = statusRes.ok ? await statusRes.json() : null;
 
-        // Request official token from backend
+        // Request official token from backend with active JWT session
+        const activeToken = authToken || localStorage.getItem('tb_auth_token');
+        if (!activeToken) {
+          // Wait for auth session to be issued
+          return;
+        }
+
+        const headers: Record<string, string> = {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${activeToken}`,
+        };
+
         const tokenRes = await fetch('/api/nexconn/token', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
           body: JSON.stringify({ userId: currentUser.id, name: currentUser.name }),
         });
 
@@ -107,8 +118,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           const creds = await tokenRes.json();
           const effectiveAppKey = creds.appKey || (import.meta.env.VITE_NEXCONN_APP_KEY as string);
           if (creds.token && effectiveAppKey) {
-            await nexconnService.initialize(effectiveAppKey);
-            await nexconnService.connect(currentUser.id, creds.token, effectiveAppKey);
+            const initSuccess = nexconnService.initialize(effectiveAppKey);
+            if (initSuccess) {
+              await nexconnService.connect(currentUser.id, creds.token, effectiveAppKey);
+            }
           }
         } else {
           const errorData = await tokenRes.json().catch(() => ({}));
@@ -122,7 +135,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               isConfigured: false,
             });
           } else {
-            setNexconnStatus(`Nexconn SDK: ${errorData.message || 'Token request failed'}`);
+            setNexconnStatus(`Nexconn SDK: ${errorData.message || 'Token request rejected'}`);
+            setNexconnDetail({
+              state: 'ERROR',
+              statusText: errorData.message || 'Token request rejected',
+              isConfigured: Boolean(configInfo?.isConfigured),
+            });
           }
         }
       } catch (e: any) {
@@ -137,7 +155,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (unsubscribeStatus) unsubscribeStatus();
       nexconnService.disconnect();
     };
-  }, [currentUser.id]);
+  }, [currentUser.id, authToken]);
 
   const switchUser = useCallback(async (userId: string) => {
     try {
