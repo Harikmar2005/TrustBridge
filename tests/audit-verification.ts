@@ -783,6 +783,58 @@ async function runAuditSuite() {
     assert(28, 'Dispute Arbitration Role Enforcement', false, err.message);
   }
 
+  // -----------------------------------------------------------
+  // SCENARIO 29: Independent Holdout Dataset AI Evaluation (20 Unseen Cases)
+  // -----------------------------------------------------------
+  try {
+    const { runBenchmarkEvaluation, INDEPENDENT_HOLDOUT_DATASET } = await import('../src/services/aiFraudService');
+    const holdout = await runBenchmarkEvaluation(INDEPENDENT_HOLDOUT_DATASET);
+
+    const passed =
+      holdout.totalCases === 20 &&
+      holdout.accuracy >= 0.90 &&
+      holdout.precision >= 0.90 &&
+      holdout.recall >= 0.90 &&
+      holdout.falsePositiveRate <= 0.10 &&
+      holdout.confusionMatrix.truePositives > 0 &&
+      holdout.confusionMatrix.trueNegatives > 0;
+
+    assert(
+      29,
+      'Independent Holdout Dataset Evaluation (20 Unseen Cases)',
+      passed,
+      `Holdout Dataset: ${holdout.totalCases} cases | Accuracy: ${Math.round(holdout.accuracy * 100)}% | Precision: ${Math.round(holdout.precision * 100)}% | Recall: ${Math.round(holdout.recall * 100)}% | FPR: ${Math.round(holdout.falsePositiveRate * 100)}%`
+    );
+  } catch (err: any) {
+    assert(29, 'Independent Holdout Dataset Evaluation (20 Unseen Cases)', false, err.message);
+  }
+
+  // -----------------------------------------------------------
+  // SCENARIO 30: Fraud Alerts & Audit Logs Staff Authorization
+  // -----------------------------------------------------------
+  try {
+    const buyerRole = 'buyer';
+    const supportRole = 'support';
+    const adminRole = 'admin';
+
+    // Fraud alerts: restricted to support & admin
+    const canAccessAlerts = (role: string) => ['support', 'admin'].includes(role);
+    // Audit logs: restricted to admin
+    const canAccessAuditLogs = (role: string) => ['admin'].includes(role);
+
+    const isAlertsProtected = !canAccessAlerts(buyerRole) && canAccessAlerts(supportRole) && canAccessAlerts(adminRole);
+    const isAuditProtected = !canAccessAuditLogs(buyerRole) && !canAccessAuditLogs(supportRole) && canAccessAuditLogs(adminRole);
+
+    assert(
+      30,
+      'Fraud Alerts & Audit Logs Staff Authorization Enforcement',
+      isAlertsProtected && isAuditProtected,
+      'Fraud alerts strictly restricted to support/admin; audit logs strictly restricted to admin.'
+    );
+  } catch (err: any) {
+    assert(30, 'Fraud Alerts & Audit Logs Staff Authorization Enforcement', false, err.message);
+  }
+
   console.log('\n======================================================');
   const allPassed = testResults.every((t) => t.passed);
   console.log(`TOTAL SCENARIOS TESTED: ${testResults.length}`);

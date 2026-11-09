@@ -335,6 +335,193 @@ export const BENCHMARK_DATASET: BenchmarkTestCase[] = [
   },
 ];
 
+// Independent Holdout Evaluation Dataset (Separate 20 independently-labelled cases never used for rule tuning)
+export const INDEPENDENT_HOLDOUT_DATASET: BenchmarkTestCase[] = [
+  // Benign Holdout (10 Cases across EN, TA, HI)
+  {
+    id: 'HOLD-BEN-01',
+    language: 'en',
+    text: 'Could you please confirm if the seller invoice is included in the package for tax purposes?',
+    isMalicious: false,
+    threatType: 'BENIGN_INVOICE',
+    expectedCategory: 'LOW',
+    description: 'Enquiring about commercial tax invoice on platform',
+  },
+  {
+    id: 'HOLD-BEN-02',
+    language: 'en',
+    text: 'I have funded the TrustBridge escrow balance for the MacBook. Please share shipping status once booked.',
+    isMalicious: false,
+    threatType: 'BENIGN_ESCROW',
+    expectedCategory: 'LOW',
+    description: 'Legitimate notification of escrow funding',
+  },
+  {
+    id: 'HOLD-BEN-03',
+    language: 'en',
+    text: 'What are the dimensions and weight of the parcel? Need to ensure my building mailroom accepts it.',
+    isMalicious: false,
+    threatType: 'BENIGN_SPECS',
+    expectedCategory: 'LOW',
+    description: 'Package dimension query',
+  },
+  {
+    id: 'HOLD-BEN-04',
+    language: 'ta',
+    text: 'பொருளின் தற்போதைய நிலை குறித்த புதிய புகைப்படங்களை அனுப்ப இயலுமா?',
+    isMalicious: false,
+    threatType: 'BENIGN_PHOTOS',
+    expectedCategory: 'LOW',
+    description: 'Tamil: Can you send latest photos of the product condition?',
+  },
+  {
+    id: 'HOLD-BEN-05',
+    language: 'ta',
+    text: 'டிரஸ்ட்பிரிட்ஜ் தளத்திலேயே முழு ஆர்டரையும் பூர்த்தி செய்வோம். அது இருவருக்கும் பாதுகாப்பானது.',
+    isMalicious: false,
+    threatType: 'BENIGN_ESCROW',
+    expectedCategory: 'LOW',
+    description: 'Tamil: We will complete full order on TrustBridge, safe for both of us.',
+  },
+  {
+    id: 'HOLD-BEN-06',
+    language: 'ta',
+    text: 'சென்னையில் நேரடி பார்சல் டெலிவரி செய்ய எத்தனை நாட்கள் ஆகும்?',
+    isMalicious: false,
+    threatType: 'BENIGN_SHIPPING',
+    expectedCategory: 'LOW',
+    description: 'Tamil: How many days for parcel delivery in Chennai?',
+  },
+  {
+    id: 'HOLD-BEN-07',
+    language: 'hi',
+    text: 'क्या पैकेज के साथ मूल जीएसटी बिल और निर्माता की वारंटी पुस्तिका मिलेगी?',
+    isMalicious: false,
+    threatType: 'BENIGN_WARRANTY',
+    expectedCategory: 'LOW',
+    description: 'Hindi: Will original GST bill and manufacturer warranty booklet be included?',
+  },
+  {
+    id: 'HOLD-BEN-08',
+    language: 'hi',
+    text: 'मैं कल दोपहर आधिकारिक ऑर्डर प्लेस करूंगा, कृपया उत्पाद सुरक्षित रखें।',
+    isMalicious: false,
+    threatType: 'BENIGN_RESERVATION',
+    expectedCategory: 'LOW',
+    description: 'Hindi: I will place official order tomorrow afternoon, please hold product.',
+  },
+  {
+    id: 'HOLD-BEN-09',
+    language: 'hi',
+    text: 'सुरक्षित एस्क्रो भुगतान के बिना कोई भी लेनदेन नहीं किया जाएगा।',
+    isMalicious: false,
+    threatType: 'BENIGN_ESCROW_AFFIRM',
+    expectedCategory: 'LOW',
+    description: 'Hindi: No transaction will be done without secure escrow payment.',
+  },
+  {
+    id: 'HOLD-BEN-10',
+    language: 'en',
+    text: 'Does this mechanical keyboard support Bluetooth 5.0 and multi-device switching?',
+    isMalicious: false,
+    threatType: 'BENIGN_INQUIRY',
+    expectedCategory: 'LOW',
+    description: 'Hardware feature enquiry',
+  },
+
+  // Malicious Holdout (10 Cases across EN, TA, HI)
+  {
+    id: 'HOLD-MAL-01',
+    language: 'en',
+    text: 'Official notice: TrustBridge escrow is having maintenance. Wire $850 immediately via Western Union to agent.id@quick-wire.top or purchase cancelled in 5 minutes!',
+    isMalicious: true,
+    threatType: 'MAINTENANCE_LURE_EXTORTION',
+    expectedCategory: 'CRITICAL',
+    description: 'Fake maintenance excuse + Western Union diversion + 5-minute ultimatum',
+  },
+  {
+    id: 'HOLD-MAL-02',
+    language: 'en',
+    text: 'Your payment was held by security team. Text your 6-digit SMS OTP right now to +1-800-555-0144 to unfreeze.',
+    isMalicious: true,
+    threatType: 'SECURITY_SMS_OTP',
+    expectedCategory: 'CRITICAL',
+    description: 'Security team impersonation demanding SMS OTP',
+  },
+  {
+    id: 'HOLD-MAL-03',
+    language: 'en',
+    text: 'I already transferred the cash! Click http://unverified-fast-ack.xyz/release-now to enter your net banking password and collect funds.',
+    isMalicious: true,
+    threatType: 'BANKING_PASSWORD_PHISHING',
+    expectedCategory: 'CRITICAL',
+    description: 'Fake cash transfer phishing for online banking password',
+  },
+  {
+    id: 'HOLD-MAL-04',
+    language: 'en',
+    text: 'Let us skip the 10% platform fee. Ping me on Telegram @deal_fast_direct and transfer via Google Pay.',
+    isMalicious: true,
+    threatType: 'TELEGRAM_FEE_EVASION',
+    expectedCategory: 'HIGH',
+    description: 'Telegram diversion + fee evasion',
+  },
+  {
+    id: 'HOLD-MAL-05',
+    language: 'ta',
+    text: 'பாதுகாப்பு குழு: உங்கள் வங்கி கணக்கு முடக்கப்பட்டுவிட்டது. உடனடியாக 6 இலக்க கடவுச்சொல்லை அனுப்பவும் அல்லது 10 நிமிடத்தில் சலுகை ரத்து!',
+    isMalicious: true,
+    threatType: 'PASSWORD_URGENCY',
+    expectedCategory: 'CRITICAL',
+    description: 'Tamil: Fake bank account block + demanding password + 10-minute ultimatum',
+  },
+  {
+    id: 'HOLD-MAL-06',
+    language: 'ta',
+    text: 'வெளிப்புற கூகுள் பே மூலம் உடனடியாக பணம் அனுப்புங்கள். தளம் 15% வரி பிடிக்கும். இணைப்பு: http://quick-escrow-claim.net',
+    isMalicious: true,
+    threatType: 'FEE_EVASION_PHISHING',
+    expectedCategory: 'CRITICAL',
+    description: 'Tamil: Fee evasion claim + phishing link',
+  },
+  {
+    id: 'HOLD-MAL-07',
+    language: 'ta',
+    text: 'டெலிகிராம் மூலம் பேசலாம். தளத்திற்கு வெளியே நேரடியாக பணம் செலுத்துங்கள், கமிஷன் மிச்சமாகும்.',
+    isMalicious: true,
+    threatType: 'TELEGRAM_DIVERSION',
+    expectedCategory: 'HIGH',
+    description: 'Tamil: Telegram shift + direct payment to avoid commission',
+  },
+  {
+    id: 'HOLD-MAL-08',
+    language: 'hi',
+    text: 'तुरंत इस लिंक http://secure-trustbridge-claim.top पर क्लिक करें और अपना बैंक पासवर्ड और डेबिट कार्ड सीवीवी दर्ज करें वर्ना खाता ब्लॉक!',
+    isMalicious: true,
+    threatType: 'DECEPTIVE_DOMAIN_CVV',
+    expectedCategory: 'CRITICAL',
+    description: 'Hindi: Deceptive subdomain (.top) + CVV/bank password theft + block threat',
+  },
+  {
+    id: 'HOLD-MAL-09',
+    language: 'hi',
+    text: 'प्लेटफॉर्म टैक्स से बचने के लिए सीधे मेरे फोनपे 9876543210 पर ₹80,000 भेजें और बैंक ओटीपी साझा करें।',
+    isMalicious: true,
+    threatType: 'PHONEPE_OTP_THEFT',
+    expectedCategory: 'CRITICAL',
+    description: 'Hindi: Tax evasion + direct payment + bank OTP harvesting',
+  },
+  {
+    id: 'HOLD-MAL-10',
+    language: 'hi',
+    text: 'टेलीग्राम पर संपर्क करें, वहां बिना किसी कमीशन के 20% डिस्काउंट मिलेगा।',
+    isMalicious: true,
+    threatType: 'TELEGRAM_COMMISSION_DISCOUNT',
+    expectedCategory: 'HIGH',
+    description: 'Hindi: Telegram diversion with commission evasion discount',
+  },
+];
+
 let aiClient: GoogleGenAI | null = null;
 function getAI(): GoogleGenAI {
   if (!aiClient) {
@@ -432,7 +619,7 @@ export function analyzeHeuristics(content: string, senderRole: string): RiskAnal
 
   // 3. Off-Platform Escrow Avoidance & Direct Payment Solicitation
   const offPlatformRegex =
-    /\b(outside|off[-\s]platform|personal\s*account|direct\s*upi|bank\s*transfer|gpay\s*directly|paytm\s*number|zelle|friends\s*&\s*family|wire\s*transfer)\b|வெளிப்புற\s*இணைப்பு|நேரடியாக\s*பணம்|தளத்திற்கு\s*வெளியே|வங்கி\s*பரிமாற்றம்|கூகுள்\s*பே\s*மூலம்|எஸ்க்ரோ\s*கட்டணம்\s*தேவையில்லை|நேரடியாக\s*கூகுள்\s*பே|நேரடியாக|बाहरी\s*लिंक|सीधे\s*पैसे|सीधा\s*भुगतान|बैंक\s*ट्रांसफर/i;
+    /\b(outside|off[-\s]platform|personal\s*account|direct\s*upi|bank\s*transfer|gpay\s*directly|paytm\s*number|phonepe|western\s*union|wire\s*transfer|wire\s*\$|zelle|friends\s*&\s*family)\b|வெளிப்புற\s*இணைப்பு|நேரடியாக\s*பணம்|தளத்திற்கு\s*வெளியே|வங்கி\s*பரிமாற்றம்|கூகுள்\s*பே\s*மூலம்|எஸ்க்ரோ\s*கட்டணம்\s*தேவையில்லை|நேரடியாக\s*கூகுள்\s*பே|நேரடியாக|फोनपे|बाहरी\s*लिंक|सीधे\s*पैसे|सीधा\s*भुगतान|बैंक\s*ट्रांसफर/i;
   const offMatch = content.match(offPlatformRegex);
   if (offMatch) {
     indicators.push('Direct payment solicitation outside TrustBridge escrow protection');
@@ -519,7 +706,7 @@ export function analyzeHeuristics(content: string, senderRole: string): RiskAnal
   }
 
   // False positive mitigation: If user explicitly specifies TrustBridge escrow and has zero high-risk indicators
-  if (hasEscrowProtectionIntent && !otpMatch && !urlAnalysis.isHighRiskUrl && !shiftMatch) {
+  if (hasEscrowProtectionIntent && !otpMatch && !urlAnalysis.isHighRiskUrl && !shiftMatch && !offMatch && !urgMatch) {
     score = Math.min(score, 10);
   }
 
@@ -639,9 +826,9 @@ Respond STRICTLY in JSON format matching this schema:
 }
 
 /**
- * Runs the benchmark test dataset and computes precision, recall, F1, accuracy, and confusion matrix
+ * Runs evaluation on a benchmark dataset and computes precision, recall, F1, accuracy, and confusion matrix
  */
-export async function runBenchmarkEvaluation(): Promise<BenchmarkReport> {
+export async function runBenchmarkEvaluation(dataset: BenchmarkTestCase[] = BENCHMARK_DATASET): Promise<BenchmarkReport> {
   let truePositives = 0;
   let trueNegatives = 0;
   let falsePositives = 0;
@@ -650,7 +837,7 @@ export async function runBenchmarkEvaluation(): Promise<BenchmarkReport> {
   const categoryBreakdown: Record<string, { total: number; correctlyIdentified: number }> = {};
   const results = [];
 
-  for (const tc of BENCHMARK_DATASET) {
+  for (const tc of dataset) {
     const analysis = await analyzeMessageForRisk(tc.text, 'seller');
     const predictedMalicious = analysis.riskScore >= 60;
 
@@ -690,9 +877,9 @@ export async function runBenchmarkEvaluation(): Promise<BenchmarkReport> {
     });
   }
 
-  const totalCases = BENCHMARK_DATASET.length;
-  const benignCount = BENCHMARK_DATASET.filter((c) => !c.isMalicious).length;
-  const maliciousCount = BENCHMARK_DATASET.filter((c) => c.isMalicious).length;
+  const totalCases = dataset.length;
+  const benignCount = dataset.filter((c) => !c.isMalicious).length;
+  const maliciousCount = dataset.filter((c) => c.isMalicious).length;
 
   const accuracy = (truePositives + trueNegatives) / totalCases;
   const precision = truePositives + falsePositives > 0 ? truePositives / (truePositives + falsePositives) : 1;

@@ -1190,8 +1190,17 @@ app.post(
 // SUPPORT TICKETS, FRAUD ALERTS, & AUDIT LOGS
 // ------------------------------------------------------------------
 
-app.get('/api/tickets', (_req: Request, res: Response) => {
-  const tickets = db.prepare(`SELECT * FROM support_tickets ORDER BY created_at DESC`).all() as any[];
+// Support tickets list: Restricted to authenticated users; buyers/sellers see only their own tickets
+app.get('/api/tickets', authenticateToken, (req: AuthenticatedRequest, res: Response) => {
+  const user = req.user!;
+  let tickets: any[];
+
+  if (user.role === 'admin' || user.role === 'support') {
+    tickets = db.prepare(`SELECT * FROM support_tickets ORDER BY created_at DESC`).all() as any[];
+  } else {
+    tickets = db.prepare(`SELECT * FROM support_tickets WHERE requester_id = ? ORDER BY created_at DESC`).all(user.userId) as any[];
+  }
+
   res.json(
     tickets.map((t) => ({
       id: t.id,
@@ -1211,7 +1220,8 @@ app.get('/api/tickets', (_req: Request, res: Response) => {
   );
 });
 
-app.get('/api/fraud-alerts', (_req: Request, res: Response) => {
+// Fraud alerts: Restricted to support & admin staff
+app.get('/api/fraud-alerts', authenticateToken, requireRoles(['support', 'admin']), (_req: AuthenticatedRequest, res: Response) => {
   const alerts = db.prepare(`SELECT * FROM fraud_alerts ORDER BY created_at DESC`).all() as any[];
   res.json(
     alerts.map((a) => ({
@@ -1230,7 +1240,8 @@ app.get('/api/fraud-alerts', (_req: Request, res: Response) => {
   );
 });
 
-app.post('/api/fraud-alerts/:id/status', (req: Request, res: Response) => {
+// Fraud alert status update: Restricted to support & admin staff
+app.post('/api/fraud-alerts/:id/status', authenticateToken, requireRoles(['support', 'admin']), (req: AuthenticatedRequest, res: Response) => {
   const { status } = req.body;
   if (!['NEW', 'REVIEWED', 'DISMISSED', 'ACTIONED'].includes(status)) {
     return res.status(400).json({ error: 'Invalid status' });
@@ -1255,7 +1266,8 @@ app.post('/api/fraud-alerts/:id/status', (req: Request, res: Response) => {
   });
 });
 
-app.get('/api/audit-logs', (_req: Request, res: Response) => {
+// Audit logs: Restricted to admin staff
+app.get('/api/audit-logs', authenticateToken, requireRoles(['admin']), (_req: AuthenticatedRequest, res: Response) => {
   const logs = db.prepare(`SELECT * FROM audit_logs ORDER BY timestamp DESC LIMIT 200`).all() as any[];
   res.json(
     logs.map((l) => ({
@@ -1276,7 +1288,8 @@ app.get('/api/audit-logs', (_req: Request, res: Response) => {
 // ADMIN METRICS & ANALYTICS
 // ------------------------------------------------------------------
 
-app.get('/api/admin/metrics', (_req: Request, res: Response) => {
+// Admin metrics: Accessible by admin and support staff
+app.get('/api/admin/metrics', authenticateToken, requireRoles(['admin', 'support']), (_req: AuthenticatedRequest, res: Response) => {
   const totalUsers = (db.prepare(`SELECT COUNT(*) as c FROM users`).get() as any).c;
   const activeConversations = (db.prepare(`SELECT COUNT(*) as c FROM conversations WHERE status = 'active'`).get() as any).c;
   const openDisputes = (db.prepare(`SELECT COUNT(*) as c FROM disputes WHERE status != 'RESOLVED'`).get() as any).c;
