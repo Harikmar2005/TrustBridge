@@ -1,4 +1,4 @@
-import bcrypt from 'bcryptjs';
+import { hashPassword } from '../services/authService';
 import { db } from './index';
 
 export function seedInitialDataIfEmpty(): void {
@@ -7,7 +7,7 @@ export function seedInitialDataIfEmpty(): void {
     return; // Already seeded
   }
 
-  const defaultPasswordHash = bcrypt.hashSync('TrustBridge2026!', 10);
+  const defaultPasswordHash = hashPassword('TrustBridge2026!');
 
   const insertUser = db.prepare(`
     INSERT INTO users (id, email, password_hash, name, role, preferred_language, avatar, trust_score, phone, created_at, updated_at)

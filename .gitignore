@@ -6,5 +6,9 @@ coverage/
 *.log
 *.db
 *.sqlite*
-.env*
+data/*.db*
+.env
+.env.local
+.env.*.local
 !.env.example
+

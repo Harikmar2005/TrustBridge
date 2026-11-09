@@ -16,6 +16,7 @@
     "@google/genai": "^2.4.0",
     "@nexconn/chat": "^26.2.1",
     "@nexconn/engine": "^26.2.1",
+    "@node-rs/argon2": "^2.2.2",
     "@tailwindcss/vite": "^4.3.3",
     "@types/bcryptjs": "^2.4.6",
     "@types/better-sqlite3": "^9.6.0",
