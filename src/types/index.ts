@@ -56,7 +56,7 @@ export interface Message {
   isFlagged: boolean;
   isFalsePositive: boolean;
   timestamp: string;
-  deliveryStatus?: 'SENT' | 'DELIVERED_CLOUD' | 'DELIVERED_LOCAL' | 'READ';
+  deliveryStatus?: 'PENDING_CLOUD' | 'DELIVERED_CLOUD' | 'DELIVERED_LOCAL' | 'FAILED' | 'READ';
   nexconnMessageId?: string;
 }
 

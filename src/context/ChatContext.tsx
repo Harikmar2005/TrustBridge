@@ -140,7 +140,7 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const lang = explicitLanguage || currentUser.preferredLanguage;
       const activeConv = conversations.find((c) => c.id === activeConversationId);
 
-      let deliveryStatus: 'DELIVERED_CLOUD' | 'DELIVERED_LOCAL' = 'DELIVERED_LOCAL';
+      let deliveryStatus: 'PENDING_CLOUD' | 'DELIVERED_CLOUD' | 'DELIVERED_LOCAL' | 'FAILED' = 'DELIVERED_LOCAL';
       let nexconnMessageId: string | undefined;
 
       // Attempt Nexconn SDK dispatch if genuinely connected
@@ -168,9 +168,11 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
           nexconnMessageId = ncResult.messageId;
           setNexconnDeliveryNotice(`Delivered via Nexconn Edge (Msg ID: ${ncResult.messageId})`);
         } else {
-          setNexconnDeliveryNotice(`Nexconn Edge skipped: ${ncResult.error || 'Connection unavailable'}`);
+          deliveryStatus = 'FAILED';
+          setNexconnDeliveryNotice(`Nexconn delivery failed: ${ncResult.error || 'Connection unavailable'}`);
         }
       } else {
+        deliveryStatus = 'DELIVERED_LOCAL';
         setNexconnDeliveryNotice('Dispatched and persisted locally in SQLite Escrow database');
       }
 

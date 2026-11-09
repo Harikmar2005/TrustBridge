@@ -40,6 +40,19 @@ seedInitialDataIfEmpty();
 const app = express();
 const PORT = 3000;
 
+// Enterprise Security Headers & CORS
+app.use((req: Request, res: Response, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+});
+
 app.use(express.json({ limit: '10mb' }));
 
 // Security Rate Limiters
@@ -534,18 +547,18 @@ app.post('/api/nexconn/token', authenticateToken, async (req: AuthenticatedReque
 // CONVERSATIONS & MESSAGING ENDPOINTS
 // ------------------------------------------------------------------
 
-app.get('/api/conversations', (req: Request, res: Response) => {
-  const { userId } = req.query;
+app.get('/api/conversations', authenticateToken, (req: AuthenticatedRequest, res: Response) => {
+  const requestingUser = req.user!;
   let conversations: any[];
 
-  if (userId && typeof userId === 'string') {
+  if (requestingUser.role === 'admin' || requestingUser.role === 'support') {
+    conversations = db.prepare(`SELECT * FROM conversations ORDER BY last_message_at DESC`).all();
+  } else {
     conversations = db.prepare(`
       SELECT * FROM conversations
-      WHERE buyer_id = ? OR seller_id = ? OR type = 'dispute_room'
+      WHERE buyer_id = ? OR seller_id = ? OR (type = 'dispute_room' AND (buyer_id = ? OR seller_id = ?))
       ORDER BY last_message_at DESC
-    `).all(userId, userId);
-  } else {
-    conversations = db.prepare(`SELECT * FROM conversations ORDER BY last_message_at DESC`).all();
+    `).all(requestingUser.userId, requestingUser.userId, requestingUser.userId, requestingUser.userId);
   }
 
   res.json(
@@ -564,7 +577,7 @@ app.get('/api/conversations', (req: Request, res: Response) => {
   );
 });
 
-app.get('/api/conversations/:id/messages', (req: Request, res: Response) => {
+app.get('/api/conversations/:id/messages', authenticateToken, requireConversationAccess, (req: AuthenticatedRequest, res: Response) => {
   const rows = db.prepare(`
     SELECT * FROM messages
     WHERE conversation_id = ?
@@ -596,13 +609,15 @@ app.get('/api/conversations/:id/messages', (req: Request, res: Response) => {
   );
 });
 
-app.post('/api/messages/send', messageLimiter, async (req: Request, res: Response) => {
-  const { conversationId, senderId, content, language, deliveryStatus: requestedDeliveryStatus, nexconnMessageId: requestedNexconnMessageId } = req.body;
-  if (!conversationId || !senderId || !content || !content.trim()) {
+app.post('/api/messages/send', messageLimiter, authenticateToken, requireConversationAccess, async (req: AuthenticatedRequest, res: Response) => {
+  const { conversationId, content, language, deliveryStatus: requestedDeliveryStatus, nexconnMessageId: requestedNexconnMessageId } = req.body;
+  if (!conversationId || !content || !content.trim()) {
     return res.status(400).json({ error: 'Missing required message parameters' });
   }
 
-  const sender = db.prepare(`SELECT * FROM users WHERE id = ?`).get(senderId) as any;
+  // Sender identity is bound directly to authenticated session (never trust client-supplied senderId)
+  const authenticatedUserId = req.user!.userId;
+  const sender = db.prepare(`SELECT * FROM users WHERE id = ?`).get(authenticatedUserId) as any;
   if (!sender) return res.status(404).json({ error: 'Sender not found' });
 
   // 1. Fetch recent conversation context for AI Fraud & Scam Risk Detection
@@ -627,7 +642,10 @@ app.post('/api/messages/send', messageLimiter, async (req: Request, res: Respons
   const messageId = `msg_${Date.now()}`;
   const now = new Date().toISOString();
   const isFlagged = analysis.riskScore >= 60;
-  const deliveryStatus = requestedDeliveryStatus === 'DELIVERED_CLOUD' ? 'DELIVERED_CLOUD' : 'DELIVERED_LOCAL';
+  const validStatuses = ['DELIVERED_CLOUD', 'PENDING_CLOUD', 'FAILED', 'DELIVERED_LOCAL'];
+  const deliveryStatus = validStatuses.includes(requestedDeliveryStatus)
+    ? requestedDeliveryStatus
+    : 'DELIVERED_LOCAL';
   const nexconnMessageId = requestedNexconnMessageId || null;
 
   const insertMsgTxn = db.transaction(() => {
@@ -780,10 +798,28 @@ app.post('/api/messages/:id/false-positive', (req: Request, res: Response) => {
 // DISPUTES & RESOLUTION WORKFLOW ENDPOINTS
 // ------------------------------------------------------------------
 
-app.get('/api/disputes', (req: Request, res: Response) => {
-  const rawDisputes = db.prepare(`SELECT * FROM disputes ORDER BY created_at DESC`).all() as any[];
-  const rawEvidence = db.prepare(`SELECT * FROM dispute_evidence`).all() as any[];
-  const rawHistory = db.prepare(`SELECT * FROM dispute_history ORDER BY timestamp ASC`).all() as any[];
+app.get('/api/disputes', authenticateToken, (req: AuthenticatedRequest, res: Response) => {
+  const requestingUser = req.user!;
+  let rawDisputes: any[];
+
+  // Non-staff can only list disputes they are directly involved in
+  if (requestingUser.role === 'admin' || requestingUser.role === 'support') {
+    rawDisputes = db.prepare(`SELECT * FROM disputes ORDER BY created_at DESC`).all() as any[];
+  } else {
+    rawDisputes = db.prepare(`
+      SELECT * FROM disputes
+      WHERE buyer_id = ? OR seller_id = ?
+      ORDER BY created_at DESC
+    `).all(requestingUser.userId, requestingUser.userId) as any[];
+  }
+
+  const disputeIds = rawDisputes.map((d) => d.id);
+  const rawEvidence = disputeIds.length > 0
+    ? db.prepare(`SELECT * FROM dispute_evidence WHERE dispute_id IN (${disputeIds.map(() => '?').join(',')})`).all(...disputeIds) as any[]
+    : [];
+  const rawHistory = disputeIds.length > 0
+    ? db.prepare(`SELECT * FROM dispute_history WHERE dispute_id IN (${disputeIds.map(() => '?').join(',')}) ORDER BY timestamp ASC`).all(...disputeIds) as any[]
+    : [];
 
   const evidenceMap: Record<string, any[]> = {};
   for (const ev of rawEvidence) {
@@ -837,7 +873,7 @@ app.get('/api/disputes', (req: Request, res: Response) => {
   res.json(result);
 });
 
-app.get('/api/disputes/:id', (req: Request, res: Response) => {
+app.get('/api/disputes/:id', authenticateToken, requireDisputeAccess, (req: AuthenticatedRequest, res: Response) => {
   const d = db.prepare(`SELECT * FROM disputes WHERE id = ? OR reference_id = ?`).get(req.params.id, req.params.id) as any;
   if (!d) return res.status(404).json({ error: 'Dispute not found' });
 
@@ -882,8 +918,10 @@ app.get('/api/disputes/:id', (req: Request, res: Response) => {
   });
 });
 
-app.post('/api/disputes/create', async (req: Request, res: Response) => {
-  const { transactionId, conversationId, buyerId, sellerId, category, reason, evidenceFiles } = req.body;
+app.post('/api/disputes/create', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
+  const { transactionId, conversationId, sellerId, category, reason, evidenceFiles } = req.body;
+  const buyerId = req.user!.userId;
+  const buyerName = req.user!.name;
 
   const refId = `TB-DSP-2026-${Math.floor(1000 + Math.random() * 9000)}`;
   const disputeId = `dsp_${Date.now()}`;
@@ -904,7 +942,7 @@ app.post('/api/disputes/create', async (req: Request, res: Response) => {
       refId,
       transactionId || 'txn_101',
       conversationId || 'conv_direct_1',
-      buyerId || 'usr_buyer_1',
+      buyerId,
       sellerId || 'usr_seller_1',
       'usr_support_1',
       category || 'suspected_fraud',
@@ -1053,8 +1091,8 @@ app.post('/api/disputes/create', async (req: Request, res: Response) => {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       `aud_${Date.now()}`,
-      buyerId || 'usr_buyer_1',
-      'Ananya Krishnan',
+      buyerId,
+      buyerName,
       'buyer',
       'DISPUTE_CREATED',
       'Dispute',
@@ -1073,15 +1111,21 @@ app.post('/api/disputes/create', async (req: Request, res: Response) => {
   res.status(201).json({ dispute: newDispute, ticket: newTicket, roomId });
 });
 
-app.post('/api/disputes/:id/resolve', (req: Request, res: Response) => {
-  const { outcome, note, agentId } = req.body;
-  const dispute = db.prepare(`SELECT * FROM disputes WHERE id = ? OR reference_id = ?`).get(req.params.id, req.params.id) as any;
-  if (!dispute) return res.status(404).json({ error: 'Dispute not found' });
+app.post(
+  '/api/disputes/:id/resolve',
+  authenticateToken,
+  requireRoles(['support', 'admin']),
+  (req: AuthenticatedRequest, res: Response) => {
+    const { outcome, note } = req.body;
+    const agentId = req.user!.userId;
+    const agentName = req.user!.name;
+    const dispute = db.prepare(`SELECT * FROM disputes WHERE id = ? OR reference_id = ?`).get(req.params.id, req.params.id) as any;
+    if (!dispute) return res.status(404).json({ error: 'Dispute not found' });
 
-  const now = new Date().toISOString();
-  const validOutcome = ['FULL_REFUND', 'PARTIAL_REFUND', 'FUNDS_RELEASED', 'DISMISSED'].includes(outcome)
-    ? outcome
-    : 'FULL_REFUND';
+    const now = new Date().toISOString();
+    const validOutcome = ['FULL_REFUND', 'PARTIAL_REFUND', 'FUNDS_RELEASED', 'DISMISSED'].includes(outcome)
+      ? outcome
+      : 'FULL_REFUND';
 
   const resolveTxn = db.transaction(() => {
     db.prepare(`
@@ -1124,9 +1168,9 @@ app.post('/api/disputes/:id/resolve', (req: Request, res: Response) => {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       `aud_${Date.now()}`,
-      agentId || 'usr_support_1',
-      'Maya Patel',
-      'support',
+      agentId,
+      agentName,
+      req.user!.role,
       'DISPUTE_RESOLVED',
       'Dispute',
       dispute.reference_id,

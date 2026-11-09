@@ -17,6 +17,7 @@ import {
   ExternalLink,
   Eye,
   EyeOff,
+  Clock,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useChat } from '../context/ChatContext';
@@ -367,6 +368,16 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ onRaiseDispute, counterp
                       <>
                         <CheckCheck className="w-3 h-3 text-emerald-400" />
                         <span>{t('deliveredViaNexconn', lang)}</span>
+                      </>
+                    ) : msg.deliveryStatus === 'PENDING_CLOUD' ? (
+                      <>
+                        <Clock className="w-3 h-3 text-amber-300 animate-spin" />
+                        <span>Pending Cloud Sync</span>
+                      </>
+                    ) : msg.deliveryStatus === 'FAILED' ? (
+                      <>
+                        <AlertTriangle className="w-3 h-3 text-rose-300" />
+                        <span>Cloud Delivery Failed</span>
                       </>
                     ) : (
                       <>
