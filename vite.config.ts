@@ -1,14 +1,16 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
-import {defineConfig} from 'vite';
+import { defineConfig } from 'vite';
 
 export default defineConfig(() => {
   return {
+    root: path.resolve(__dirname, 'frontend'),
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
-        '@': path.resolve(import.meta.dirname || '.', '.'),
+        '@': path.resolve(__dirname, 'frontend/src'),
+        '@shared': path.resolve(__dirname, 'shared'),
       },
     },
     server: {

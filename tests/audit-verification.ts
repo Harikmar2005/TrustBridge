@@ -17,19 +17,19 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import bcrypt from 'bcryptjs';
-import { db, initializeDatabase } from '../src/db';
-import { seedInitialDataIfEmpty } from '../src/db/seed';
+import { db, initializeDatabase } from '../backend/src/database';
+import { seedInitialDataIfEmpty } from '../backend/src/database/seed';
 import {
   issueSessionToken,
   revokeSessionToken,
   AuthTokenPayload,
-} from '../src/services/authService';
-import { requestNexconnUserToken } from '../src/services/nexconnService';
-import { nexconnService } from '../src/lib/nexconnClient';
+} from '../backend/src/services/authService';
+import { requestNexconnUserToken } from '../backend/src/services/nexconnService';
+import { nexconnService } from '../frontend/src/lib/nexconnClient';
 import {
   analyzeMessageForRisk,
   runBenchmarkEvaluation,
-} from '../src/services/aiFraudService';
+} from '../backend/src/ai/aiFraudService';
 
 interface TestResult {
   scenario: number;
@@ -91,7 +91,7 @@ async function runAuditSuite() {
   // SCENARIO 2: Invalid authentication is rejected (Argon2id & legacy bcrypt)
   // -----------------------------------------------------------
   try {
-    const { verifyPassword } = await import('../src/services/authService');
+    const { verifyPassword } = await import('../backend/src/services/authService');
     const user = db.prepare(`SELECT * FROM users WHERE email = ?`).get('ananya.buyer@trustbridge.io') as any;
     const correctPasswordValid = await verifyPassword('TrustBridge2026!', user.password_hash);
     const wrongPasswordValid = await verifyPassword('WrongPassword123!', user.password_hash);
@@ -382,7 +382,7 @@ async function runAuditSuite() {
   // SCENARIO 14: Nexconn Singapore AreaCode.SG & Config Status
   // -----------------------------------------------------------
   try {
-    const { getNexconnConfigStatus } = await import('../src/services/nexconnService');
+    const { getNexconnConfigStatus } = await import('../backend/src/services/nexconnService');
     const status = getNexconnConfigStatus();
 
     assert(
@@ -644,7 +644,7 @@ async function runAuditSuite() {
   // SCENARIO 22: Argon2id Cryptographic Password Hashing & Salt Verification
   // -----------------------------------------------------------
   try {
-    const { hashPassword, verifyPassword } = await import('../src/services/authService');
+    const { hashPassword, verifyPassword } = await import('../backend/src/services/authService');
     const rawPlaintext = 'SecureEnterprisePassword2026!';
     const hashed = await hashPassword(rawPlaintext);
 
@@ -787,7 +787,7 @@ async function runAuditSuite() {
   // SCENARIO 29: Independent Holdout Dataset AI Evaluation (20 Unseen Cases)
   // -----------------------------------------------------------
   try {
-    const { runBenchmarkEvaluation, INDEPENDENT_HOLDOUT_DATASET } = await import('../src/services/aiFraudService');
+    const { runBenchmarkEvaluation, INDEPENDENT_HOLDOUT_DATASET } = await import('../backend/src/ai/aiFraudService');
     const holdout = await runBenchmarkEvaluation(INDEPENDENT_HOLDOUT_DATASET);
 
     const passed =
@@ -839,7 +839,7 @@ async function runAuditSuite() {
   // SCENARIO 31: Automated Nexconn Token Generation & TTL Caching
   // -----------------------------------------------------------
   try {
-    const { clearNexconnTokenCache } = await import('../src/services/nexconnService');
+    const { clearNexconnTokenCache } = await import('../backend/src/services/nexconnService');
     clearNexconnTokenCache('usr_test_auto_31');
 
     // Verify cache clearing and token isolation
@@ -863,7 +863,7 @@ async function runAuditSuite() {
     const sessionToken = issueSessionToken(buyerUser);
 
     // Verify token can be verified and user identity recovered without re-prompting
-    const { verifySessionToken } = await import('../src/services/authService');
+    const { verifySessionToken } = await import('../backend/src/services/authService');
     const verified = verifySessionToken(sessionToken.token);
 
     assert(
@@ -913,7 +913,7 @@ async function runAuditSuite() {
     const jwt = await import('jsonwebtoken');
     const expiredJwt = jwt.default.sign(expiredPayload, process.env.JWT_SECRET || 'dev-secret-trustbridge-secure-key-2026-min-32-chars-long');
 
-    const { verifySessionToken } = await import('../src/services/authService');
+    const { verifySessionToken } = await import('../backend/src/services/authService');
     const verifiedExpired = verifySessionToken(expiredJwt);
 
     assert(
@@ -931,7 +931,7 @@ async function runAuditSuite() {
   // -----------------------------------------------------------
   try {
     // Verify that nexconnService is a singleton and handles idempotent calls
-    const isSingleton = nexconnService === (await import('../src/lib/nexconnClient')).nexconnService;
+    const isSingleton = nexconnService === (await import('../frontend/src/lib/nexconnClient')).nexconnService;
     const hasEnsureInit = typeof nexconnService.ensureInitialized === 'function';
 
     assert(

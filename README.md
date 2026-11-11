@@ -1,194 +1,306 @@
-# TRUSTBRIDGE 4.0
-> **Building Trust. Securing Every Conversation.**
+# TRUSTBRIDGE
+> **Multilingual Marketplace Trust, Safety & Escrow Resolution Platform**
 
-TrustBridge is an AI-powered, enterprise-grade secure marketplace communication and fraud prevention platform. Built with React 19, Node.js, Express, SQLite, Nexconn Chat SDK, and Google Gemini AI, TrustBridge safeguards buyers and sellers against fraud, phishing, fee evasion, credential theft, and extortion in real time across English, Tamil, and Hindi.
+TrustBridge is an enterprise-grade full-stack marketplace communication and fraud prevention platform built with React 19, TypeScript, Express, SQLite (better-sqlite3), Nexconn Chat SDK, and Google Gemini AI. TrustBridge safeguards buyers and sellers against phishing, credential theft, payment fraud, fee evasion, and extortion in real time across English, Tamil, and Hindi.
 
 ---
 
-## 1. System Architecture
+## 1. Clean Full-Stack Architecture
+
+The codebase is organized into independent, decoupled layers following strict separation of concerns:
 
 ```
-                                  +---------------------------------------+
-                                  |            Client Browser             |
-                                  |  (React 19 + Vite + Tailwind CSS)     |
-                                  +-------------------+-------------------+
-                                                      |
-                                 REST API & Sessions  |  Nexconn Realtime WebSockets
-                                 (Bearer JWT)         |  (AreaCode.SG / Singapore)
-                                                      v
-                                  +-------------------+-------------------+
-                                  |         TrustBridge Gateway           |
-                                  |     (Express + SQLite + Argon2id)     |
-                                  +---------+-------------------+---------+
-                                            |                   |
-                     +----------------------+                   +----------------------+
-                     |                                                                 |
-                     v                                                                 v
-+--------------------+---------------------+                 +-------------------------+--------------------+
-|         Gemini 2.5 Flash / Sentinel      |                 |            Nexconn Cloud Cluster         |
-|  - Real-time Threat Intelligence         |                 |  - DirectChannel P2P Messaging        |
-|  - Multilingual Translation (EN, TA, HI) |                 |  - GroupChannel Multi-Party Arbitration  |
-|  - Deterministic Fallback Heuristics     |                 |  - Delivery & Read Receipts Lifecycle   |
-|  - URL Risk & Domain Spoof Analyzer      |                 |  - Message Deduplication Cache          |
-+------------------------------------------+                 +----------------------------------------------+
+TrustBridge/
+├── frontend/                     # Client application (browser-only)
+│   ├── public/                   # Static public assets
+│   ├── src/
+│   │   ├── components/           # React UI components
+│   │   │   └── fraud/            # AI Risk badge, warnings & security center
+│   │   ├── context/              # Client state providers (Auth, Chat, Dispute, Nexconn)
+│   │   ├── hooks/                # React custom hooks (useNexconn)
+│   │   ├── lib/                  # Centralized API client & Nexconn client
+│   │   ├── pages/                # Buyer, Seller, Support, Admin & Landing portals
+│   │   ├── types/                # Re-exports shared domain models
+│   │   ├── App.tsx               # Root React application
+│   │   ├── main.tsx              # DOM entry point
+│   │   └── index.css             # Tailwind CSS styles
+│   ├── index.html                # HTML5 entry template
+│   ├── vite.config.ts            # Independent Vite configuration with API proxy
+│   ├── tsconfig.json             # Frontend TypeScript configuration
+│   ├── package.json              # Independent frontend dependencies & scripts
+│   └── .env.example              # Frontend environment variables template
+│
+├── backend/                      # API server & services (server-only)
+│   ├── src/
+│   │   ├── config/               # Environment & enterprise security configs
+│   │   ├── database/             # SQLite connection, schema migrations & seeds
+│   │   ├── controllers/          # Express route handler controllers
+│   │   ├── routes/               # Modular REST API route declarations
+│   │   ├── middleware/           # Auth, RBAC, IDOR & error handling middleware
+│   │   ├── services/             # Auth, Nexconn token & translation services
+│   │   ├── ai/                   # Multi-vector fraud intelligence & Gemini engines
+│   │   ├── models/               # Server-side model interfaces
+│   │   └── utils/                # Logging & utility helpers
+│   ├── data/models/              # In-memory ML TF-IDF model artifacts
+│   ├── server.ts                 # Express server & Vite middleware entrypoint
+│   ├── package.json              # Independent backend dependencies & scripts
+│   ├── tsconfig.json             # Backend TypeScript configuration
+│   └── .env.example              # Backend environment variables template
+│
+├── shared/                       # Browser-safe contracts & shared types
+│   ├── contracts/api.ts          # API route constants & request/response contracts
+│   └── types/index.ts            # Enterprise domain models (User, Dispute, Message, etc.)
+│
+├── tests/
+│   ├── audit-verification.ts     # 35-scenario critical technical audit runner
+│   └── migration-verification.ts # 8-check full-stack architectural isolation test
+│
+├── server.ts                     # Backward-compatible root entrypoint
+├── package.json                  # Root monorepo workspace & orchestration scripts
+├── tsconfig.json                 # Base TypeScript configuration
+├── .gitignore                    # Git ignore file (excludes secrets, databases, dist)
+└── README.md                     # Complete architectural documentation
 ```
 
 ---
 
-## 2. Key Features
+## 2. Environment Configuration
 
-- **Argon2id Enterprise Authentication:** Industry-standard password hashing via `@node-rs/argon2` with zero hardcoded secret fallbacks, backwards-compatible legacy bcrypt migration, and instant session revocation.
-- **Strict Role-Based Access Control (RBAC):** Public registration is restricted strictly to `buyer` or `seller` roles to prevent privilege escalation. Support and Admin accounts cannot be self-registered.
-- **Official Nexconn Chat Integration:**
-  - Singleton client configured with `AreaCode.SG` (Singapore DC) and `LogLevel.WARN`.
-  - Secure server-side signature authentication (`SHA1(AppSecret + Nonce + Timestamp)`).
-  - P2P messaging via `DirectChannel` and dispute room resolution via `GroupChannel`.
-  - Truthful status reporting (`PENDING_CLOUD`, `DELIVERED_CLOUD`, `DELIVERED_LOCAL`, `FAILED`, `READ`).
-  - Automatic reconnection with exponential backoff and message deduplication cache.
-- **Multilingual AI Fraud & Scam Sentinel:**
-  - 3-Way Translation across English, Tamil, and Hindi.
-  - URL Risk Analyzer (detecting unverified TLDs `.xyz`, `.top`, deceptive subdomains, non-HTTPS links).
-  - Detects OTP theft, credential harvesting, support impersonation, off-platform communication diversion, fee evasion, and coercive urgency.
-  - Transparent engine provenance (`GEMINI_2_5_FLASH` vs `HEURISTIC_RULE_ENGINE`).
-- **Dispute Resolution & Escrow Mediation:**
-  - Formal multi-party dispute rooms connecting Buyer, Seller, and Tier-1 Trust Specialist.
-  - Granular evidence access control (strictly confined to participants and staff).
-  - Complainant identity bound strictly to JWT session to prevent IDOR / impersonation attacks.
-  - Complete immutable audit trails for disputes, messages, and security events.
-- **Dynamic Database Analytics:** Real-time KPI aggregation from SQLite (`disputes`, `messages`, `users`, `support_tickets`), without fabricated mock statistics.
-
----
-
-## 3. Technology Stack
-
-- **Frontend:** React 19, Vite, Tailwind CSS v4, Lucide Icons, Recharts, Motion
-- **Backend:** Node.js, Express, SQLite (`better-sqlite3`), `tsx`
-- **Security:** Argon2id (`@node-rs/argon2`), JSON Web Tokens (`jsonwebtoken`), `express-rate-limit`, CORS & Security Headers
-- **Real-Time Communication:** Nexconn Chat SDK (`@nexconn/chat`, `@nexconn/engine`)
-- **AI & NLP:** Google Gemini 2.5 Flash (`@google/genai`)
-
----
-
-## 4. API Security & RBAC Enforcement Matrix
-
-| Endpoint | Method | Required Role | Access Control Policy |
-|---|---|---|---|
-| `/api/auth/register` | `POST` | Public | Restricted strictly to `buyer` or `seller`. Attempts to register `admin` or `support` return `400 Bad Request`. |
-| `/api/auth/login` | `POST` | Public | Authenticates via Argon2id. Issues signed JWT and records active session in SQLite. |
-| `/api/auth/logout` | `POST` | Authenticated | Revokes session immediately in `auth_sessions` table. |
-| `/api/nexconn/token` | `POST` | Authenticated | Generates Nexconn token for authenticated user. Non-admins requesting tokens for other users receive `403 Forbidden`. |
-| `/api/conversations` | `GET` | Authenticated | Returns only conversations where the requesting user is either `buyer_id` or `seller_id` (or all for staff). |
-| `/api/conversations/:id/messages` | `GET` | Authenticated | Strict IDOR protection: verified caller must be a conversation participant, support specialist, or admin. |
-| `/api/messages/send` | `POST` | Authenticated | Sender identity is bound directly to `req.user.userId`. Caller must be authorized for the destination conversation. |
-| `/api/disputes` | `GET` | Authenticated | Returns user's related disputes (or all disputes for support/admin staff). |
-| `/api/disputes/create` | `POST` | Authenticated (`buyer`) | Complainant `buyerId` is strictly extracted from `req.user.userId` to prevent caller impersonation. |
-| `/api/disputes/:id` | `GET` | Authenticated | Strict access isolation: only complainant, respondent, support, or admin can read dispute details. |
-| `/api/disputes/:id/resolve` | `POST` | `support`, `admin` | Arbitrating disputes and releasing escrow is strictly forbidden to buyers and sellers (`403 Forbidden`). |
-| `/api/disputes/:id/messages` | `GET`, `POST` | Authenticated | Restricted to dispute room participants and authorized staff. |
-| `/api/fraud-alerts` | `GET` | `support`, `admin` | Security queue restricted exclusively to staff (`403 Forbidden` for standard users). |
-| `/api/fraud-alerts/:id/status` | `PATCH` | `support`, `admin` | Updating threat mitigation status restricted exclusively to staff. |
-| `/api/audit-logs` | `GET` | `admin` | Compliance and security audit trail restricted exclusively to admin role. |
-| `/api/admin/metrics` | `GET` | `admin` | Platform-wide KPIs computed dynamically from SQLite, restricted strictly to admins. |
-
----
-
-## 5. Environment Configuration
-
-Create a `.env` file in the root directory (refer to `.env.example`):
-
+### Backend Environment (`backend/.env.example`)
+Create `backend/.env` with:
 ```bash
-# JWT Secret for Session Signing (Minimum 32 characters required in production)
-JWT_SECRET=enterprise_super_secret_jwt_key_at_least_32_chars_long_2026!
+# Server Port
+PORT=8000
 
-# Nexconn Singapore Cloud Credentials
-NEXCONN_API_URL=https://sg-api.nexconn.com
+# JSON Web Token Secret (Min 32 characters)
+JWT_SECRET=your_jwt_secret_min_32_characters_here
+
+# Google Gemini AI API Key (Server-Side Only - Never exposed to frontend)
+GEMINI_API_KEY=your_gemini_api_key_here
+
+# Nexconn Chat Cloud Edge Credentials
+NEXCONN_API_URL=https://api.nexconn.io
 NEXCONN_APP_KEY=your_nexconn_app_key_here
 NEXCONN_APP_SECRET=your_nexconn_app_secret_here
-VITE_NEXCONN_APP_KEY=your_nexconn_app_key_here
 
-# Optional: Gemini API Key for Live LLM Sentinel
-GEMINI_API_KEY=your_gemini_api_key_here
+# Database Path
+DATABASE_PATH=data/trustbridge.db
 ```
 
-> **Credential Transparency Policy:** If `NEXCONN_APP_KEY` or `NEXCONN_APP_SECRET` is omitted, the system operates in secure local mode and returns `NEXCONN_CREDENTIALS_REQUIRED`. It will never fabricate tokens, generate simulated cloud IDs, or pretend to be connected to the cloud when offline.
+### Frontend Environment (`frontend/.env.example`)
+Create `frontend/.env` with:
+```bash
+# Backend API Base URL (leave empty for same-origin or Vite dev proxy)
+VITE_API_BASE_URL=
+
+# Public Nexconn App Key (Public client credential)
+VITE_NEXCONN_APP_KEY=your_nexconn_app_key_here
+```
+
+> **Security Guarantee:** `NEXCONN_APP_SECRET`, `GEMINI_API_KEY`, and `JWT_SECRET` are kept strictly on the backend. The frontend only receives the public `VITE_NEXCONN_APP_KEY` and short-lived user tokens generated via authenticated backend exchange.
 
 ---
 
-## 6. Automated Audit Suite (30 Scenarios)
+## 3. Setup and Run Commands
 
-TrustBridge includes a rigorous automated test suite verifying all 30 audit scenarios:
-
+### Unified Mode (Standard AI Studio / Container Port 3000)
+Runs the Express backend mounting Vite development middleware pointing directly to `frontend/`:
 ```bash
+# Install root dependencies
+npm install
+
+# Start unified development server on port 3000
+npm run dev
+
+# Run comprehensive test suites
 npm test
 ```
 
-### Verified Test Scenarios:
-1. **Scenario 1:** Database Persistence Across Restarts (SQLite WAL survival).
-2. **Scenario 2:** Invalid Authentication Rejection (Brute-force protection).
-3. **Scenario 3:** Role Authorization RBAC Enforcement (Forbidden 403 on admin routes).
-4. **Scenario 4:** Conversation Access Isolation (IDOR isolation between buyers and sellers).
-5. **Scenario 5:** No Fake Nexconn Token Generation (Honest `NEXCONN_CREDENTIALS_REQUIRED`).
-6. **Scenario 6:** Accurate Message Delivery Status (Truthful `DELIVERED_LOCAL` reporting).
-7. **Scenario 7:** AI Heuristic Safety & Provenance Transparency (`HEURISTIC_RULE_ENGINE`).
-8. **Scenario 8:** Fraud Alerts Database Persistence (SQLite `fraud_alerts` persistence).
-9. **Scenario 9:** Dispute Evidence Access Control (Evidence locked to dispute parties).
-10. **Scenario 10:** Session Revocation & Expiry Enforcement (`auth_sessions` invalidation).
-11. **Scenario 11:** AI Fraud Benchmark Evaluation (30 curated cases: 100% accuracy).
-12. **Scenario 12:** Nexconn Token Endpoint Authorization Enforcement (Cross-user generation forbidden).
-13. **Scenario 13:** Nexconn Official Channel API Routing (`DirectChannel` & `GroupChannel`).
-14. **Scenario 14:** Nexconn `AreaCode.SG` & Truthful Configuration Reporting.
-15. **Scenario 15:** Duplicate Message Deduplication Cache (Replay attack prevention).
-16. **Scenario 16:** SQLite Full Message Persistence (Message & translations committed).
-17. **Scenario 17:** Nexconn SHA1 Signature Algorithm & Input Ordering verification.
-18. **Scenario 18:** Local vs Cloud Delivery Isolation (No fake cloud IDs).
-19. **Scenario 19:** Nexconn Group Channel & Dispute Room API Support.
-20. **Scenario 20:** Message Read Receipt Lifecycle (`READ` status transition).
-21. **Scenario 21:** Exponential Backoff Reconnect Algorithm (`2s`, `4s`, `8s`, cap `10s`).
-22. **Scenario 22:** Argon2id Password Hashing & Verification (`$argon2id$` prefix verified).
-23. **Scenario 23:** Privilege Escalation Prevention on Registration (Admin/Support locked).
-24. **Scenario 24:** Dynamic SQLite Analytics & Agent Workload Computation.
-25. **Scenario 25:** Enterprise Security Headers & CORS Protection (`nosniff`, `xss-protection`).
-26. **Scenario 26:** Conversation Access IDOR Isolation.
-27. **Scenario 27:** Dispute Complainant Session Binding.
-28. **Scenario 28:** Dispute Arbitration Role Enforcement (Support & Admin only).
-29. **Scenario 29:** Independent Holdout Dataset Evaluation (20 unseen cases: 100% accuracy).
-30. **Scenario 30:** Fraud Alerts & Audit Logs Staff Authorization Enforcement.
+### Independent Development Mode (Separated Frontend & Backend)
+Run backend on port 8000 and frontend on port 5173:
+
+**Terminal 1 — Backend (Port 8000):**
+```bash
+# Option A: From root
+npm run dev:backend
+
+# Option B: Direct inside backend/
+cd backend
+npm install
+npm run dev
+```
+
+**Terminal 2 — Frontend (Port 5173 with proxy to backend):**
+```bash
+# Option A: From root
+npm run dev:frontend
+
+# Option B: Direct inside frontend/
+cd frontend
+npm install
+npm run dev
+```
 
 ---
 
-## 7. AI Fraud Evaluation Datasets
+## 4. Centralized API Client Architecture
 
-TrustBridge was tested against two distinct datasets:
-
-### Benchmark Dataset (30 Cases)
-- **Composition:** 15 Benign, 15 Malicious across English, Tamil, and Hindi.
-- **Accuracy:** 100%
-- **Precision:** 100%
-- **Recall:** 100%
-- **False Positive Rate (FPR):** 0%
-- **Confusion Matrix:** TP: 15, TN: 15, FP: 0, FN: 0
-
-### Independent Holdout Dataset (20 Unseen Cases)
-- **Composition:** 10 Benign, 10 Malicious across English, Tamil, and Hindi.
-- **Accuracy:** 100%
-- **Precision:** 100%
-- **Recall:** 100%
-- **False Positive Rate (FPR):** 0%
-- **Confusion Matrix:** TP: 10, TN: 10, FP: 0, FN: 0
+All browser-facing communication with the server is routed through `frontend/src/lib/api.ts`:
+- Resolves the API base URL from `import.meta.env.VITE_API_BASE_URL` with automatic fallback to window origin.
+- Automatically injects the `Authorization: Bearer <token>` header from `localStorage`.
+- Automatically catches 401 Unauthorized responses and dispatches session expiration events.
+- Re-exports typed methods: `api.get<T>()`, `api.post<T>()`, `api.patch<T>()`, `api.delete<T>()`.
 
 ---
 
-## 8. Pre-Seeded Demo Personas
+## 5. Nexconn Real-Time Integration Architecture
 
-| Role | Name | Email | Password |
-|---|---|---|---|
-| **Buyer** | Ananya Krishnan | `ananya.buyer@trustbridge.io` | `TrustBridge2026!` |
-| **Seller** | Rajesh Sharma | `rajesh.seller@trustbridge.io` | `TrustBridge2026!` |
-| **Support** | Maya Patel | `maya.support@trustbridge.io` | `TrustBridge2026!` |
-| **Admin** | Viktor Vance | `admin.lead@trustbridge.io` | `TrustBridge2026!` |
+1. **Client Singleton Initialization:**
+   `frontend/src/lib/nexconnClient.ts` instantiates a single `NCEngine` with `AreaCode.SG` (Singapore DC) and `LogLevel.WARN`. It guarantees zero duplicate engine instances across React re-renders.
+2. **Secure Token Generation:**
+   Users authenticate with TrustBridge via Argon2id credentials. The backend signs the user token request using `SHA1(AppSecret + Nonce + Timestamp)`.
+3. **P2P & Group Communication:**
+   - Peer-to-peer discussions are routed via `DirectChannel`.
+   - Multi-party dispute rooms connect Buyer, Seller, and Tier-1 Support Agent via `GroupChannel`.
+4. **Delivery & Read Receipts:**
+   Messages track truthful delivery states (`PENDING_CLOUD`, `DELIVERED_CLOUD`, `DELIVERED_LOCAL`, `FAILED`, `READ`). In-memory deduplication caches prevent duplicate message reprocessing.
+5. **Reconnection & Resilience:**
+   Exponential backoff reconnection logic (2s, 4s, 8s, capped at 10s) and automatic re-auth on online window events.
 
 ---
 
-## 9. License
+## 6. Gemini AI & Multi-Vector Fraud Detection Architecture
 
-Proprietary - TrustBridge Platform 2026. All rights reserved.
+1. **Multi-Vector Threat Interception:**
+   - **NLP Engine (`backend/src/ai/nlpEngine.ts`):** Normalizes Unicode, removes zero-width characters, and detects intent patterns across English, Tamil, and Hindi.
+   - **URL Intelligence (`backend/src/ai/urlIntelligence.ts`):** Defends against Server-Side Request Forgery (SSRF) by blocking private IPv4 ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, 169.254.169.254) and flagging deceptive homoglyphs, shorteners, and credential parameters.
+   - **Behavioral Engine (`backend/src/ai/behaviouralEngine.ts`):** Evaluates account age, transaction velocity, historical dispute ratios, and sudden behavioral shifts.
+   - **ML Classifier (`backend/src/ai/mlClassifier.ts`):** In-memory TF-IDF Logistic Regression model loaded from `data/models/fraud_model_v2.json`.
+2. **Gemini 2.5 Flash Integration (`backend/src/ai/unifiedRiskEngine.ts`):**
+   - The server calls Google GenAI (`gemini-2.5-flash`) with structured prompts.
+   - Deterministic Fallback: If `GEMINI_API_KEY` is absent or the Gemini service fails, TrustBridge automatically falls back to the deterministic multi-vector heuristic engine without blocking message delivery.
+   - Engine Provenance: All analyses explicitly record the engine used (`GEMINI_2_5_FLASH` vs `HEURISTIC_RULE_ENGINE`).
+
+---
+
+## 7. Database Backup and Migration Instructions
+
+TrustBridge uses SQLite with Write-Ahead Logging (`PRAGMA journal_mode = WAL`) and strict foreign keys (`PRAGMA foreign_keys = ON`).
+
+### Database Backup
+Because SQLite WAL mode is enabled, running a checkpoint before taking a physical file backup ensures all dirty pages are safely written:
+```bash
+# 1. Perform a passive WAL checkpoint via node script or sqlite3 CLI
+node -e "
+  const Database = require('better-sqlite3');
+  const db = new Database('data/trustbridge.db');
+  db.pragma('wal_checkpoint(PASSIVE)');
+  db.close();
+  console.log('WAL checkpoint complete.');
+"
+
+# 2. Copy the database file to your backup location
+cp data/trustbridge.db backups/trustbridge_backup_$(date +%Y%m%d_%H%M%S).db
+```
+
+### Database Schema Migrations
+Migrations are applied idempotently in `backend/src/database/schema.ts` inside `initializeDatabase()`:
+- `CREATE TABLE IF NOT EXISTS` for `users`, `user_profiles`, `transactions`, `conversations`, `messages`, `disputes`, `dispute_evidence`, `dispute_history`, `support_tickets`, `fraud_alerts`, `audit_logs`, and `auth_sessions`.
+- Safe `ALTER TABLE` checks with column existence introspection ensure zero data loss on schema evolution.
+
+---
+
+## 8. Deployment Instructions
+
+### Production Frontend Build
+```bash
+cd frontend
+npm run build
+# Output generated in frontend/dist/
+```
+
+### Production Full-Stack Start
+```bash
+# Set production environment
+export NODE_ENV=production
+export PORT=3000
+
+# Start server (serves static frontend/dist/ and mounts /api)
+node server.ts
+# or
+npm start
+```
+
+---
+
+## 9. Test Verification Results
+
+All 35 technical audit scenarios and all 8 architecture migration checks execute cleanly:
+
+```bash
+$ npm test
+
+======================================================
+   TRUSTBRIDGE CRITICAL TECHNICAL AUDIT TEST RUNNER
+======================================================
+[PASS] Scenario 1: Database Persistence Across Restarts
+[PASS] Scenario 2: Invalid Authentication Rejection
+[PASS] Scenario 3: Role Authorization RBAC Enforcement
+[PASS] Scenario 4: Conversation Access Isolation
+[PASS] Scenario 5: No Fake Nexconn Token Generation
+[PASS] Scenario 6: Accurate Message Delivery Status
+[PASS] Scenario 7: AI/Heuristic Safety & Provenance Transparency
+[PASS] Scenario 8: Fraud Alerts Database Persistence
+[PASS] Scenario 9: Dispute Evidence Access Control
+[PASS] Scenario 10: Session Revocation & Expiry Enforcement
+[PASS] Scenario 11: AI Fraud Benchmark Evaluation (30 Test Cases) - 100% Accuracy
+[PASS] Scenario 12: Nexconn Token Endpoint Authorization Enforcement
+[PASS] Scenario 13: Nexconn Official Channel API Routing (Direct & Group)
+[PASS] Scenario 14: Nexconn AreaCode.SG & Truthful Configuration Reporting
+[PASS] Scenario 15: Duplicate Message Deduplication Cache
+[PASS] Scenario 16: SQLite Full Message Persistence
+[PASS] Scenario 17: Nexconn SHA1 Signature Algorithm & Input Ordering
+[PASS] Scenario 18: Local vs Cloud Delivery Isolation
+[PASS] Scenario 19: Nexconn Group Channel & Dispute Room API Support
+[PASS] Scenario 20: Message Read Receipt Lifecycle
+[PASS] Scenario 21: Exponential Backoff Reconnect Algorithm
+[PASS] Scenario 22: Argon2id Password Hashing & Verification
+[PASS] Scenario 23: Privilege Escalation Prevention on Registration
+[PASS] Scenario 24: Dynamic SQLite Analytics & Agent Workload Computation
+[PASS] Scenario 25: Security Headers & CORS Protection
+[PASS] Scenario 26: Conversation Access IDOR Isolation
+[PASS] Scenario 27: Dispute Complainant Session Binding
+[PASS] Scenario 28: Dispute Arbitration Role Enforcement
+[PASS] Scenario 29: Independent Holdout Dataset Evaluation (20 Unseen Cases) - 100% Accuracy
+[PASS] Scenario 30: Fraud Alerts & Audit Logs Staff Authorization Enforcement
+[PASS] Scenario 31: Automated Nexconn Token Generation & TTL Caching
+[PASS] Scenario 32: Session Restoration on Page Refresh & Browser Reopen
+[PASS] Scenario 33: Multi-User Identity Isolation & Token Separation
+[PASS] Scenario 34: Token Expiration Renewal & Force Refresh Handling
+[PASS] Scenario 35: Background Auto-Connect Singleton Protection
+TOTAL SCENARIOS TESTED: 35 | PASSED: 35 | FAILED: 0
+
+======================================================
+   TRUSTBRIDGE ARCHITECTURE MIGRATION VERIFICATION
+======================================================
+[PASS] Check 1: Top-Level Architecture Separation (frontend/, backend/, shared/)
+[PASS] Check 2: Frontend Directory Completeness (components, context, hooks, lib, pages, types, public)
+[PASS] Check 3: Backend Modular Architecture Completeness (routes, controllers, services, middleware, models, database, ai, config, utils)
+[PASS] Check 4: Shared Contracts & Types Isolation (browser-safe types and contracts)
+[PASS] Check 5: Secret Isolation & Security Discipline (Zero server secrets in frontend)
+[PASS] Check 6: Centralized API Client Implementation (Base URL & token handling)
+[PASS] Check 7: Environment Configuration Templates (Separate backend & frontend .env.example)
+[PASS] Check 8: Multi-Package Script & Dependency Autonomy
+TOTAL MIGRATION CHECKS: 8 | PASSED: 8 | FAILED: 0
+```
+
+---
+
+## 10. Known Limitations and Remaining Technical Debt
+
+1. **Single-Node SQLite Architecture:**
+   SQLite with WAL mode provides instant local persistence, zero latency, and zero cloud lock-in for single-instance deployments. For horizontal clustering across multiple availability zones, a migration to PostgreSQL (via Cloud SQL) using the existing schema in `backend/src/database/schema.ts` would be recommended.
+2. **Live Nexconn Cloud Provisioning:**
+   When running without real `NEXCONN_APP_KEY` and `NEXCONN_APP_SECRET` credentials in `.env`, the system truthfully reports `CREDENTIALS_REQUIRED` and securely falls back to local database messaging. To connect to the live Singapore edge cluster, provide valid enterprise Nexconn credentials.
+3. **ML Model Online Training:**
+   The current machine learning classifier loads pre-calibrated TF-IDF Logistic Regression weights from `data/models/fraud_model_v2.json`. Future enhancements can include an automated continuous learning pipeline triggered by verified false positive user reports.

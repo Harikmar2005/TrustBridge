@@ -4,13 +4,15 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx server.ts",
-    "start": "tsx server.ts",
-    "build": "vite build",
-    "preview": "vite preview",
-    "clean": "rm -rf dist server.js",
+    "dev": "tsx backend/server.ts",
+    "dev:backend": "PORT=8000 STANDALONE_API=true tsx backend/server.ts",
+    "dev:frontend": "npm run dev --prefix frontend",
+    "start": "NODE_ENV=production tsx backend/server.ts",
+    "build": "npm run build --prefix frontend",
+    "preview": "vite preview frontend",
+    "clean": "rm -rf dist frontend/dist server.js",
     "lint": "tsc --noEmit",
-    "test": "tsx tests/audit-verification.ts"
+    "test": "tsx tests/audit-verification.ts && tsx tests/migration-verification.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
