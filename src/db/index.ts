@@ -199,6 +199,28 @@ export function initializeDatabase(): void {
       revoked_at TEXT
     );
 
+    -- AI 2.0 Fraud Analyses Table: Complete structured intelligence persistence
+    CREATE TABLE IF NOT EXISTS fraud_analyses (
+      id TEXT PRIMARY KEY,
+      message_id TEXT REFERENCES messages(id) ON DELETE CASCADE,
+      conversation_id TEXT NOT NULL,
+      sender_id TEXT NOT NULL,
+      risk_score INTEGER NOT NULL,
+      risk_category TEXT NOT NULL CHECK(risk_category IN ('LOW', 'MEDIUM', 'HIGH', 'CRITICAL')),
+      confidence_score REAL NOT NULL DEFAULT 0.95,
+      nlp_score INTEGER NOT NULL DEFAULT 0,
+      url_score INTEGER NOT NULL DEFAULT 0,
+      behavioural_score INTEGER NOT NULL DEFAULT 0,
+      ml_score INTEGER NOT NULL DEFAULT 0,
+      detected_indicators_json TEXT NOT NULL,
+      evidence_references_json TEXT NOT NULL,
+      recommendation TEXT NOT NULL,
+      explanation TEXT NOT NULL,
+      model_version TEXT NOT NULL DEFAULT 'v2.0-sentinel',
+      detectors_status_json TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
     -- Performance Indexes
     CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id);
     CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_id);
@@ -208,6 +230,9 @@ export function initializeDatabase(): void {
     CREATE INDEX IF NOT EXISTS idx_fraud_alerts_severity ON fraud_alerts(severity, review_status);
     CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp ON audit_logs(timestamp);
     CREATE INDEX IF NOT EXISTS idx_auth_sessions_token ON auth_sessions(token_id);
+    CREATE INDEX IF NOT EXISTS idx_fraud_analyses_msg ON fraud_analyses(message_id);
+    CREATE INDEX IF NOT EXISTS idx_fraud_analyses_conv ON fraud_analyses(conversation_id);
+    CREATE INDEX IF NOT EXISTS idx_fraud_analyses_created ON fraud_analyses(created_at);
   `);
 
   // Safe schema migrations for existing SQLite databases

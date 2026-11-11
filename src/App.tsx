@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { AuthProvider } from './context/AuthContext';
+import { NexconnProvider } from './context/NexconnContext';
 import { ChatProvider } from './context/ChatContext';
 import { DisputeProvider } from './context/DisputeContext';
 import { Navbar } from './components/Navbar';
@@ -9,6 +10,7 @@ import { BuyerDashboard } from './pages/BuyerDashboard';
 import { SellerDashboard } from './pages/SellerDashboard';
 import { SupportDashboard } from './pages/SupportDashboard';
 import { AdminDashboard } from './pages/AdminDashboard';
+import { SecurityCenter } from './components/fraud/SecurityCenter';
 import { ShieldCheck, Heart, Radio } from 'lucide-react';
 
 export default function App() {
@@ -17,8 +19,9 @@ export default function App() {
 
   return (
     <AuthProvider>
-      <ChatProvider>
-        <DisputeProvider>
+      <NexconnProvider>
+        <ChatProvider>
+          <DisputeProvider>
           <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900 font-sans selection:bg-blue-100 selection:text-blue-900">
             {/* Top Navigation */}
             <Navbar
@@ -48,6 +51,7 @@ export default function App() {
               {currentTab === 'seller' && <SellerDashboard />}
               {currentTab === 'support' && <SupportDashboard />}
               {currentTab === 'admin' && <AdminDashboard />}
+              {currentTab === 'security' && <SecurityCenter />}
             </main>
 
             {/* Professional Enterprise Footer */}
@@ -75,6 +79,7 @@ export default function App() {
           </div>
         </DisputeProvider>
       </ChatProvider>
-    </AuthProvider>
+    </NexconnProvider>
+  </AuthProvider>
   );
 }

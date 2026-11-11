@@ -57,18 +57,44 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setAllProfiles(data.profiles);
         }
 
-        // Initialize session for current user
-        const sessionRes = await fetch('/api/auth/switch-demo-user', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ userId: currentUser.id }),
-        });
+        // Restore existing authenticated session if present in localStorage
+        const savedToken = localStorage.getItem('tb_auth_token');
+        let sessionRestored = false;
 
-        if (sessionRes.ok) {
-          const sessionData = await sessionRes.json();
-          setCurrentUser(sessionData.user);
-          setAuthToken(sessionData.token);
-          localStorage.setItem('tb_auth_token', sessionData.token);
+        if (savedToken) {
+          try {
+            const meRes = await fetch('/api/auth/me', {
+              headers: { Authorization: `Bearer ${savedToken}` },
+            });
+            if (meRes.ok) {
+              const meData = await meRes.json();
+              setCurrentUser(meData.user);
+              setAuthToken(savedToken);
+              sessionRestored = true;
+            } else {
+              // Token expired, revoked, or invalid
+              localStorage.removeItem('tb_auth_token');
+              setAuthToken(null);
+            }
+          } catch {
+            // Network fallback
+          }
+        }
+
+        // Fallback: Initialize default session if no valid session restored
+        if (!sessionRestored) {
+          const sessionRes = await fetch('/api/auth/switch-demo-user', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userId: currentUser.id }),
+          });
+
+          if (sessionRes.ok) {
+            const sessionData = await sessionRes.json();
+            setCurrentUser(sessionData.user);
+            setAuthToken(sessionData.token);
+            localStorage.setItem('tb_auth_token', sessionData.token);
+          }
         }
       } catch (err) {
         console.warn('Initial auth load error:', err);
@@ -93,8 +119,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       try {
         // First check server Nexconn configuration
-        const statusRes = await fetch('/api/nexconn/status');
-        const configInfo = statusRes.ok ? await statusRes.json() : null;
+        const statusRes = await fetch('/api/v1/nexconn/status').catch(() => fetch('/api/nexconn/status'));
+        const configInfo = statusRes.ok ? await statusRes.json().catch(() => null) : null;
 
         // Request official token from backend with active JWT session
         const activeToken = authToken || localStorage.getItem('tb_auth_token');
@@ -108,17 +134,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           Authorization: `Bearer ${activeToken}`,
         };
 
-        const tokenRes = await fetch('/api/nexconn/token', {
+        const tokenRes = await fetch('/api/v1/nexconn/token', {
           method: 'POST',
           headers,
           body: JSON.stringify({ userId: currentUser.id, name: currentUser.name }),
-        });
+        }).catch(() =>
+          fetch('/api/nexconn/token', {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ userId: currentUser.id, name: currentUser.name }),
+          })
+        );
 
         if (tokenRes.ok) {
           const creds = await tokenRes.json();
           const effectiveAppKey = creds.appKey || (import.meta.env.VITE_NEXCONN_APP_KEY as string);
           if (creds.token && effectiveAppKey) {
-            const initSuccess = nexconnService.initialize(effectiveAppKey);
+            const initSuccess = nexconnService.ensureInitialized(effectiveAppKey);
             if (initSuccess) {
               await nexconnService.connect(currentUser.id, creds.token, effectiveAppKey);
             }

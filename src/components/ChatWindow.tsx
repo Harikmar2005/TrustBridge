@@ -24,6 +24,10 @@ import { useChat } from '../context/ChatContext';
 import { LanguageCode, Message } from '../types';
 import { RiskAnalysisCard } from './RiskAnalysisCard';
 import { TrustBadge } from './TrustBadge';
+import { RiskBadge } from './fraud/RiskBadge';
+import { SecurityWarning } from './fraud/SecurityWarning';
+import { URLRiskIndicator } from './fraud/URLRiskIndicator';
+import { AnalyzedUrlDetail } from '../services/fraudEngine/types';
 import { t } from '../lib/i18n';
 
 interface ChatWindowProps {
@@ -50,6 +54,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ onRaiseDispute, counterp
     setDisplayMode,
     searchQuery,
     setSearchQuery,
+    reportFalsePositive,
   } = useChat();
 
   const [inputContent, setInputContent] = useState('');
@@ -57,6 +62,46 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ onRaiseDispute, counterp
   const [selectedAttachment, setSelectedAttachment] = useState<string | null>(null);
   const [revealedOriginalMsgIds, setRevealedOriginalMsgIds] = useState<Set<string>>(new Set());
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const extractUrlDetails = (text: string, riskScore: number): AnalyzedUrlDetail[] => {
+    const matches = text.match(/https?:\/\/[^\s<>"']+/gi);
+    if (!matches) return [];
+    return matches.map((rawUrl) => {
+      try {
+        const parsed = new URL(rawUrl);
+        const hostname = parsed.hostname;
+        const isIp = /^\d+\.\d+\.\d+\.\d+$/.test(hostname);
+        const isShort = /bit\.ly|tinyurl|t\.co|goo\.gl|ow\.ly|is\.gd|buff\.ly|rebrand\.ly/i.test(hostname);
+        const hasDeceptive = /paypal|bank|secure|verify|account|wallet|update|login/i.test(hostname);
+        const tld = hostname.split('.').pop() || '';
+        return {
+          url: rawUrl,
+          domain: hostname,
+          isIpHost: isIp,
+          isShortener: isShort,
+          isDeceptiveDomain: hasDeceptive || riskScore >= 70,
+          isSsrfBlocked: false,
+          tld,
+          isSecureProtocol: parsed.protocol === 'https:',
+          hasSuspiciousParams: /[?&](otp|token|code|pin|redirect|callback|dest)=/i.test(rawUrl),
+          reputationStatus: riskScore >= 75 ? 'MALICIOUS' : riskScore >= 40 ? 'SUSPICIOUS' : 'SAFE',
+        };
+      } catch {
+        return {
+          url: rawUrl,
+          domain: rawUrl.slice(0, 30),
+          isIpHost: false,
+          isShortener: false,
+          isDeceptiveDomain: false,
+          isSsrfBlocked: false,
+          tld: '',
+          isSecureProtocol: false,
+          hasSuspiciousParams: false,
+          reputationStatus: 'SUSPICIOUS',
+        };
+      }
+    });
+  };
 
   const lang = currentUser.preferredLanguage;
 
@@ -268,6 +313,11 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ onRaiseDispute, counterp
                     <span>{origLangDef?.flag || '🌐'}</span>
                     <span>{origLangDef?.label || msg.language}</span>
                   </span>
+
+                  {/* TrustBridge AI 2.0 Risk Badge */}
+                  {(msg.riskScore > 30 || msg.isFlagged) && (
+                    <RiskBadge score={msg.riskScore} category={msg.riskCategory} size="sm" />
+                  )}
                 </div>
 
                 {/* Message Bubble */}
@@ -388,10 +438,45 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ onRaiseDispute, counterp
                   </div>
                 </div>
 
-                {/* AI Risk Analysis Card if flagged */}
-                {msg.isFlagged && !msg.isFalsePositive && (
+                {/* Extracted URL Risk Indicators */}
+                {extractUrlDetails(msg.content, msg.riskScore).length > 0 && (
+                  <div className="w-full max-w-xl my-1.5 space-y-1">
+                    {extractUrlDetails(msg.content, msg.riskScore).map((urlDet, uIdx) => (
+                      <URLRiskIndicator key={uIdx} analyzedUrl={urlDet} />
+                    ))}
+                  </div>
+                )}
+
+                {/* AI Security Warning with Forensic Breakdown */}
+                {msg.isFlagged && (
                   <div className="w-full max-w-xl">
-                    <RiskAnalysisCard message={msg} onRaiseDispute={onRaiseDispute} />
+                    <SecurityWarning
+                      score={msg.riskScore}
+                      category={msg.riskCategory}
+                      explanation={msg.riskExplanation || (msg.detectedIndicators && msg.detectedIndicators[0]) || 'Suspicious communication pattern intercepted by multi-vector AI sentinel.'}
+                      recommendation={msg.recommendedAction || 'Keep all communications and escrow payments strictly within TrustBridge.'}
+                      indicators={msg.detectedIndicators || []}
+                      evidence={(msg.detectedIndicators || []).map((ind) => ({
+                        indicatorType: 'AI_SENTINEL_SIGNAL',
+                        textSnippet: ind,
+                        reason: ind,
+                      }))}
+                      confidenceScore={msg.confidenceScore}
+                      detectionEngine={msg.detectionEngine}
+                      messageId={msg.id}
+                      onReportFalsePositive={reportFalsePositive}
+                      isFalsePositive={msg.isFalsePositive}
+                    />
+                    {onRaiseDispute && msg.riskScore >= 60 && !msg.isFalsePositive && (
+                      <div className="mt-1 flex justify-end">
+                        <button
+                          onClick={onRaiseDispute}
+                          className="px-3 py-1 rounded-lg bg-red-600 hover:bg-red-700 text-white text-xs font-bold shadow-xs transition-colors"
+                        >
+                          Freeze Escrow &amp; Raise Dispute
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

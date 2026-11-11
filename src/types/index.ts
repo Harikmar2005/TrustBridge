@@ -51,6 +51,7 @@ export interface Message {
   riskCategory: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
   detectedIndicators: string[];
   recommendedAction: string;
+  riskExplanation?: string;
   detectionEngine?: 'GEMINI_2_5_FLASH' | 'HEURISTIC_RULE_ENGINE';
   confidenceScore?: number;
   isFlagged: boolean;

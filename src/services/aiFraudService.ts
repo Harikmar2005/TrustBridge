@@ -737,92 +737,39 @@ export function analyzeHeuristics(content: string, senderRole: string): RiskAnal
 /**
  * Primary AI Fraud Analysis function with Gemini 2.5 Flash and Heuristic fallback
  * Guarantees provenance transparency (never claims AI if basic rules were used)
+// Re-export modular Fraud Engine capabilities
+export * from './fraudEngine/types';
+export { runUnifiedFraudAnalysis } from './fraudEngine/unifiedRiskEngine';
+export { analyzeMessageNLP, normalizeText } from './fraudEngine/nlpEngine';
+export { analyzeUrls, isPrivateOrReservedIp } from './fraudEngine/urlIntelligence';
+export { analyzeBehaviour } from './fraudEngine/behaviouralEngine';
+export { predictML, getModelMetadata } from './fraudEngine/mlClassifier';
+
+/**
+ * Primary AI Fraud Analysis function powered by the Unified AI 2.0 Engine
+ * Guarantees provenance transparency (never claims AI if basic rules were used)
  */
 export async function analyzeMessageForRisk(
   content: string,
   senderRole: string,
   conversationContext?: string[]
 ): Promise<RiskAnalysisResult> {
-  const heuristicResult = analyzeHeuristics(content, senderRole);
+  const unified = await (await import('./fraudEngine/unifiedRiskEngine')).runUnifiedFraudAnalysis(content, {
+    senderRole,
+    conversationContext,
+    persist: false,
+  });
 
-  const apiKey = process.env.GEMINI_API_KEY?.trim();
-  if (!apiKey) {
-    // Transparently return deterministic heuristic output
-    return heuristicResult;
-  }
-
-  try {
-    const ai = getAI();
-    const contextPrompt = conversationContext && conversationContext.length > 0
-      ? `\nPrior Conversation Context:\n${conversationContext.slice(-3).map((c) => `- ${c}`).join('\n')}\n`
-      : '';
-
-    const prompt = `You are the TrustBridge AI Trust & Scam Detection Sentinel for an online marketplace.
-Analyze this message sent by a ${senderRole} in English, Tamil, or Hindi:${contextPrompt}
-Current Message: "${content}"
-
-Evaluate for:
-1. Suspicious payment requests outside platform escrow.
-2. Phishing links, unverified external domains, credential harvesting.
-3. OTP, PIN, password, CVV or account security credential requests.
-4. Coercive urgency, emotional manipulation, extortion.
-5. Impersonation of platform administrators, security, or support staff.
-6. Social engineering or off-platform communication diversion (WhatsApp/Telegram).
-7. Fake payment confirmations or overpayment refund traps.
-
-Respond STRICTLY in JSON format matching this schema:
-{
-  "riskScore": number (0 to 100),
-  "riskCategory": "LOW" | "MEDIUM" | "HIGH" | "CRITICAL",
-  "confidenceScore": number (0.00 to 1.00),
-  "detectedIndicators": string[],
-  "evidenceReferences": [
-    {
-      "textSnippet": string,
-      "indicatorType": string,
-      "reason": string
-    }
-  ],
-  "explanation": string,
-  "recommendedAction": string
-}`;
-
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-        temperature: 0.1,
-      },
-    });
-
-    const responseText = response.text;
-    if (responseText) {
-      const parsed = JSON.parse(responseText);
-      const riskScore = Math.max(parsed.riskScore ?? 0, heuristicResult.riskScore);
-      const category: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' =
-        riskScore >= 80 ? 'CRITICAL' : riskScore >= 60 ? 'HIGH' : riskScore >= 30 ? 'MEDIUM' : 'LOW';
-
-      return {
-        riskScore,
-        riskCategory: category,
-        confidenceScore: parsed.confidenceScore ?? 0.95,
-        detectionEngine: 'GEMINI_2_5_FLASH',
-        detectedIndicators: parsed.detectedIndicators?.length
-          ? parsed.detectedIndicators
-          : heuristicResult.detectedIndicators,
-        evidenceReferences: parsed.evidenceReferences?.length
-          ? parsed.evidenceReferences
-          : heuristicResult.evidenceReferences,
-        explanation: parsed.explanation || heuristicResult.explanation,
-        recommendedAction: parsed.recommendedAction || heuristicResult.recommendedAction,
-      };
-    }
-  } catch (err: any) {
-    console.warn('[AI Fraud Sentinel] Gemini call failed, using heuristic baseline:', err.message);
-  }
-
-  return heuristicResult;
+  return {
+    riskScore: unified.riskScore,
+    riskCategory: unified.riskCategory,
+    confidenceScore: unified.confidenceScore,
+    detectionEngine: unified.detectionEngine as any,
+    detectedIndicators: unified.detectedIndicators,
+    evidenceReferences: unified.evidenceReferences,
+    explanation: unified.explanation,
+    recommendedAction: unified.recommendedAction,
+  };
 }
 
 /**
@@ -906,3 +853,7 @@ export async function runBenchmarkEvaluation(dataset: BenchmarkTestCase[] = BENC
     results,
   };
 }
+
+export { runUnifiedFraudAnalysis } from './fraudEngine/unifiedRiskEngine';
+export { analyzeUrls } from './fraudEngine/urlIntelligence';
+export { getModelMetadata } from './fraudEngine/mlClassifier';

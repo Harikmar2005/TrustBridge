@@ -44,14 +44,37 @@ export function getNexconnConfigStatus(): NexconnConfigStatus {
   };
 }
 
+// Token cache to minimize unnecessary roundtrips to Nexconn Server while token is valid
+interface CachedTokenEntry {
+  appKey: string;
+  token: string;
+  userId: string;
+  expiresAt: number; // Unix timestamp ms
+}
+
+const tokenCache = new Map<string, CachedTokenEntry>();
+
+/**
+ * Clears cached Nexconn token for a specific user or all users
+ */
+export function clearNexconnTokenCache(userId?: string): void {
+  if (userId) {
+    tokenCache.delete(userId);
+  } else {
+    tokenCache.clear();
+  }
+}
+
 /**
  * Requests an authentic user token from the official Nexconn / RongCloud Server API
  * Uses SHA1 signature algorithm: SHA1(App-Secret + Nonce + Timestamp)
+ * Features built-in in-memory caching with TTL (valid for 24h, refreshed 5 min prior)
  */
 export async function requestNexconnUserToken(params: {
   userId: string;
   name: string;
   portraitUri?: string;
+  forceRefresh?: boolean;
 }): Promise<NexconnTokenResponse> {
   const appKey = process.env.NEXCONN_APP_KEY?.trim();
   const appSecret = process.env.NEXCONN_APP_SECRET?.trim();
@@ -67,6 +90,21 @@ export async function requestNexconnUserToken(params: {
       message:
         'Live Nexconn credentials not configured. Please supply NEXCONN_APP_KEY and NEXCONN_APP_SECRET in .env to issue genuine tokens from the Nexconn Cloud Edge.',
     };
+  }
+
+  // Check valid cache unless forced refresh requested
+  if (!params.forceRefresh) {
+    const cached = tokenCache.get(params.userId.trim());
+    const fiveMinutes = 5 * 60 * 1000;
+    if (cached && cached.appKey === appKey && cached.expiresAt > Date.now() + fiveMinutes) {
+      return {
+        success: true,
+        appKey: cached.appKey,
+        userId: cached.userId,
+        token: cached.token,
+        expiresIn: Math.max(60, Math.floor((cached.expiresAt - Date.now()) / 1000)),
+      };
+    }
   }
 
   const nonce = crypto.randomInt(100000, 999999).toString();
@@ -101,12 +139,20 @@ export async function requestNexconnUserToken(params: {
     const data: any = await res.json();
 
     if (res.ok && data.code === 200 && data.token) {
+      const expiresInSeconds = 86400; // 24 hours standard
+      tokenCache.set(params.userId.trim(), {
+        appKey,
+        token: data.token,
+        userId: params.userId.trim(),
+        expiresAt: Date.now() + expiresInSeconds * 1000,
+      });
+
       return {
         success: true,
         appKey,
         userId: params.userId,
         token: data.token,
-        expiresIn: 86400,
+        expiresIn: expiresInSeconds,
       };
     } else {
       return {

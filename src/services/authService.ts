@@ -161,6 +161,35 @@ export function revokeSessionToken(tokenId: string): boolean {
 }
 
 /**
+ * Verifies a JWT session token string against signature, expiration, and database revocation
+ */
+export function verifySessionToken(token: string): AuthTokenPayload | null {
+  try {
+    const decoded = jwt.verify(token, getJwtSecret(), {
+      issuer: JWT_ISSUER,
+      audience: JWT_AUDIENCE,
+    }) as AuthTokenPayload;
+
+    // Check if token session has been revoked or expired in SQLite
+    const session = db.prepare(`
+      SELECT revoked_at, expires_at FROM auth_sessions WHERE token_id = ?
+    `).get(decoded.tokenId) as { revoked_at: string | null; expires_at: string } | undefined;
+
+    if (!session || session.revoked_at) {
+      return null;
+    }
+
+    if (new Date(session.expires_at) < new Date()) {
+      return null;
+    }
+
+    return decoded;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Express Middleware: Authenticates JWT Bearer Token, validates claims and verifies active session
  */
 export function authenticateToken(req: AuthenticatedRequest, res: Response, next: NextFunction): void {
@@ -175,42 +204,18 @@ export function authenticateToken(req: AuthenticatedRequest, res: Response, next
     return;
   }
 
-  try {
-    const decoded = jwt.verify(token, getJwtSecret(), {
-      issuer: JWT_ISSUER,
-      audience: JWT_AUDIENCE,
-    }) as AuthTokenPayload;
-
-    // Check if token session has been revoked or expired in SQLite
-    const session = db.prepare(`
-      SELECT revoked_at, expires_at FROM auth_sessions WHERE token_id = ?
-    `).get(decoded.tokenId) as { revoked_at: string | null; expires_at: string } | undefined;
-
-    if (!session || session.revoked_at) {
-      res.status(401).json({
-        error: 'SESSION_REVOKED',
-        message: 'This session has been revoked. Please log in again.',
-      });
-      return;
-    }
-
-    if (new Date(session.expires_at) < new Date()) {
-      res.status(401).json({
-        error: 'TOKEN_EXPIRED',
-        message: 'Authentication token has expired. Please log in again.',
-      });
-      return;
-    }
-
-    // Attach validated user payload to request
-    req.user = decoded;
-    next();
-  } catch (err: any) {
+  const decoded = verifySessionToken(token);
+  if (!decoded) {
     res.status(401).json({
       error: 'INVALID_TOKEN',
-      message: 'Invalid, expired, or malformed authentication token.',
+      message: 'Invalid, revoked, or expired authentication token. Please log in again.',
     });
+    return;
   }
+
+  // Attach validated user payload to request
+  req.user = decoded;
+  next();
 }
 
 /**

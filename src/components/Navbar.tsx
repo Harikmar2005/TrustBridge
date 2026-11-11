@@ -1,5 +1,5 @@
 import React from 'react';
-import { ShieldCheck, Radio, Globe, UserCheck, AlertTriangle, PlayCircle, RotateCcw } from 'lucide-react';
+import { ShieldCheck, ShieldAlert, Radio, Globe, UserCheck, AlertTriangle, PlayCircle, RotateCcw } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useDispute } from '../context/DisputeContext';
 import { LanguageCode, UserRole } from '../types';
@@ -143,6 +143,17 @@ export const Navbar: React.FC<NavbarProps> = ({
                   {criticalAlertsCount}
                 </span>
               )}
+            </button>
+            <button
+              onClick={() => setCurrentTab('security')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                currentTab === 'security'
+                  ? 'bg-gradient-to-r from-blue-700 to-indigo-700 text-white shadow-xs'
+                  : 'text-slate-700 hover:text-slate-900 hover:bg-slate-200/50'
+              }`}
+            >
+              <ShieldAlert className="w-3.5 h-3.5 text-blue-500" />
+              <span>AI Security Center</span>
             </button>
           </nav>
 
