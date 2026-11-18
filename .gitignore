@@ -56,3 +56,7 @@ coverage/
 *.lcov
 .nyc_output
 
+# Playwright CLI captures
+.playwright-cli/
+
+

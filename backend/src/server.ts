@@ -1,26 +1,30 @@
-
+import http from "http";
 import app from "./app";
 import { db, initDatabase } from "./config/database";
 import { env } from "./config/env";
+import { initSocketServer } from "./socket";
 
 async function startServer(): Promise<void> {
   try {
     await initDatabase();
 
-    const server = app.listen(env.PORT, () => {
+    const httpServer = http.createServer(app);
+    initSocketServer(httpServer);
+
+    httpServer.listen(env.PORT, "0.0.0.0", () => {
       console.log("------------------------------------");
-      console.log("       TRUSTBRIDGE BACKEND");
+      console.log("       TRUSTBRIDGE PLATFORM");
       console.log("------------------------------------");
-      console.log(`Server: http://localhost:${env.PORT}`);
+      console.log(`Server: http://0.0.0.0:${env.PORT}`);
       console.log(`Environment: ${env.NODE_ENV}`);
-      console.log(`Frontend: ${env.FRONTEND_URL}`);
+      console.log(`Socket.IO: active on same port`);
       console.log("------------------------------------");
     });
 
     function gracefulShutdown(signal: string): void {
       console.log(`\nReceived ${signal}. Closing server...`);
 
-      server.close(() => {
+      httpServer.close(() => {
         try {
           db.close();
           console.log("Database connection closed.");

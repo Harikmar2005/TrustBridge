@@ -1,26 +1,31 @@
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
-
 import {
+  changePassword,
+  forgotPassword,
   getMe,
+  getSessions,
   login,
   logout,
   register,
+  resetPassword,
+  revokeSession,
 } from "../controllers/auth.controller";
-
 import { authenticate } from "../middleware/authenticate";
 import { validate } from "../middleware/validate";
-
 import {
+  changePasswordSchema,
+  forgotPasswordSchema,
   loginSchema,
   registerSchema,
+  resetPasswordSchema,
 } from "../schemas/auth.schema";
 
 const router = Router();
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  limit: 10,
+  limit: 30,
   standardHeaders: "draft-8",
   legacyHeaders: false,
   message: {
@@ -29,26 +34,30 @@ const authLimiter = rateLimit({
   },
 });
 
-// Registration
+router.post("/register", authLimiter, validate(registerSchema), register);
+router.post("/login", authLimiter, validate(loginSchema), login);
 router.post(
-  "/register",
+  "/forgot-password",
   authLimiter,
-  validate(registerSchema),
-  register
+  validate(forgotPasswordSchema),
+  forgotPassword
+);
+router.post(
+  "/reset-password",
+  authLimiter,
+  validate(resetPasswordSchema),
+  resetPassword
 );
 
-// Login
-router.post(
-  "/login",
-  authLimiter,
-  validate(loginSchema),
-  login
-);
-
-// Current authenticated user
 router.get("/me", authenticate, getMe);
-
-// Logout
-router.post("/logout", logout);
+router.post("/logout", authenticate, logout);
+router.post(
+  "/change-password",
+  authenticate,
+  validate(changePasswordSchema),
+  changePassword
+);
+router.get("/sessions", authenticate, getSessions);
+router.delete("/sessions/:id", authenticate, revokeSession);
 
 export default router;

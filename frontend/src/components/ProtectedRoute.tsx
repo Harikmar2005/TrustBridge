@@ -1,48 +1,37 @@
-
-import { useEffect, useState } from "react";
 import { Navigate, Outlet } from "react-router-dom";
-import { getCurrentUser } from "../services/api";
-import type { AuthUser } from "../services/api";
+import type { UserRole } from "@shared/types";
+import { useAuth } from "../contexts/AuthContext";
 
-export default function ProtectedRoute() {
-    const [user, setUser] = useState<AuthUser | null>(null);
-    const [loading, setLoading] = useState(true);
+interface ProtectedRouteProps {
+  allowedRoles?: UserRole[];
+}
 
-    useEffect(() => {
-        let active = true;
+export default function ProtectedRoute({ allowedRoles }: ProtectedRouteProps) {
+  const { user, loading } = useAuth();
 
-        async function checkAuthentication() {
-            try {
-                const response = await getCurrentUser();
+  if (loading) {
+    return (
+      <div
+        className="flex min-h-screen items-center justify-center bg-[#F5F8FB] text-sm font-medium text-[#64748B]"
+        role="status"
+      >
+        Verifying your session...
+      </div>
+    );
+  }
 
-                if (active && response.success && response.user) {
-                    setUser(response.user);
-                }
-            } catch {
-                if (active) setUser(null);
-            } finally {
-                if (active) setLoading(false);
-            }
-        }
+  if (!user) {
+    return <Navigate to="/login" replace />;
+  }
 
-        checkAuthentication();
+  if (allowedRoles && !allowedRoles.includes(user.role)) {
+    return (
+      <Navigate
+        to={user.role === "admin" ? "/admin" : "/dashboard"}
+        replace
+      />
+    );
+  }
 
-        return () => {
-            active = false;
-        };
-    }, []);
-
-    if (loading) {
-        return (
-            <div className="auth-loading" role="status">
-                Checking your session...
-            </div>
-        );
-    }
-
-    if (!user) {
-        return <Navigate to="/login" replace />;
-    }
-
-    return <Outlet context={{ user }} />;
+  return <Outlet context={{ user }} />;
 }

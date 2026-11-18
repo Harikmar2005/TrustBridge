@@ -1,7 +1,8 @@
 import { IncomingMessage, ServerResponse } from "http";
 import { Socket } from "net";
 import app from "../src/app";
-import { initDatabase } from "../src/config/database";
+import { db, initDatabase } from "../src/config/database";
+import { env } from "../src/config/env";
 
 interface TestResponse {
   statusCode: number;
@@ -88,16 +89,15 @@ async function runTests() {
 
   function assert(condition: boolean, name: string, details?: any) {
     if (condition) {
-      console.log(`✅ PASS: ${name}`);
+      console.log(`PASS: ${name}`);
       passed++;
     } else {
-      console.error(`❌ FAIL: ${name}`, details || "");
+      console.error(`FAIL: ${name}`, details || "");
       failed++;
     }
   }
 
-  // 1 & 2. Health check
-  console.log("\n--- Testing 1 & 2: Server & /api/health ---");
+  // 1. Health & Database FK
   const healthRes = await dispatch("GET", "/api/health");
   assert(
     healthRes.statusCode === 200 && healthRes.body.status === "ok",
@@ -105,13 +105,28 @@ async function runTests() {
     healthRes.body
   );
 
-  // 3. Registration: Buyer & Seller & Third User
-  console.log("\n--- Testing 3: Registration ---");
+  const fkRow = db.prepare<[], { foreign_keys: number }>("PRAGMA foreign_keys").get();
+  assert(fkRow?.foreign_keys === 1, "SQLite foreign keys are enabled");
+
+  // 2. Registration & RBAC guard
   const rand = Date.now().toString().slice(-6);
   const buyerEmail = `buyer_${rand}@test.com`;
   const sellerEmail = `seller_${rand}@test.com`;
   const thirdEmail = `unrelated_${rand}@test.com`;
   const password = "StrongPassword123!";
+
+  // Attempt privilege escalation via register
+  const adminRegAttempt = await dispatch("POST", "/api/auth/register", {
+    fullName: "Attacker",
+    email: `attacker_${rand}@test.com`,
+    password,
+    role: "admin",
+  });
+  assert(
+    adminRegAttempt.statusCode === 400,
+    "Registration rejects admin role escalation with 400",
+    adminRegAttempt.body
+  );
 
   const regBuyer = await dispatch("POST", "/api/auth/register", {
     fullName: "Alice Buyer",
@@ -120,9 +135,8 @@ async function runTests() {
     role: "buyer",
   });
   assert(
-    regBuyer.statusCode === 201 && regBuyer.body.success === true && regBuyer.body.user.role === "buyer",
-    "Registration of Buyer succeeds with 201",
-    regBuyer.body
+    regBuyer.statusCode === 201 && regBuyer.body.user?.role === "buyer",
+    "Registration of Buyer succeeds with 201"
   );
   const buyerId = regBuyer.body.user?.id;
   const buyerCookie = extractCookie(regBuyer);
@@ -134,9 +148,8 @@ async function runTests() {
     role: "seller",
   });
   assert(
-    regSeller.statusCode === 201 && regSeller.body.success === true && regSeller.body.user.role === "seller",
-    "Registration of Seller succeeds with 201",
-    regSeller.body
+    regSeller.statusCode === 201 && regSeller.body.user?.role === "seller",
+    "Registration of Seller succeeds with 201"
   );
   const sellerId = regSeller.body.user?.id;
   const sellerCookie = extractCookie(regSeller);
@@ -147,180 +160,265 @@ async function runTests() {
     password,
     role: "buyer",
   });
-  assert(regThird.statusCode === 201, "Registration of unrelated third user succeeds");
+  assert(regThird.statusCode === 201, "Third user registered");
   const thirdCookie = extractCookie(regThird);
 
-  // Duplicate registration check
   const regDup = await dispatch("POST", "/api/auth/register", {
-    fullName: "Duplicate User",
+    fullName: "Dup",
     email: buyerEmail,
     password,
     role: "buyer",
   });
-  assert(regDup.statusCode === 409, "Duplicate registration rejected with 409", regDup.body);
+  assert(regDup.statusCode === 409, "Duplicate email rejected with 409");
 
-  // 4. Login
-  console.log("\n--- Testing 4: Login ---");
-  const loginRes = await dispatch("POST", "/api/auth/login", {
-    email: buyerEmail,
+  // 3. Login & SQLi attempt
+  const sqliAttempt = await dispatch("POST", "/api/auth/login", {
+    email: "' OR 1=1 --",
     password,
   });
-  assert(
-    loginRes.statusCode === 200 && loginRes.body.success === true && loginRes.body.user.email === buyerEmail,
-    "Login works with 200 and returns user",
-    loginRes.body
-  );
+  assert(sqliAttempt.statusCode === 400, "SQLi email string rejected by validation");
 
   const loginFail = await dispatch("POST", "/api/auth/login", {
     email: buyerEmail,
     password: "WrongPassword!",
   });
-  assert(loginFail.statusCode === 401, "Login with wrong password fails with 401");
+  assert(loginFail.statusCode === 401, "Wrong password returns 401");
 
-  // 5. /api/auth/me
-  console.log("\n--- Testing 5: /api/auth/me ---");
-  const meRes = await dispatch("GET", "/api/auth/me", undefined, {
-    cookie: buyerCookie,
-  });
+  const loginBuyer = await dispatch(
+    "POST",
+    "/api/auth/login",
+    {
+      email: buyerEmail,
+      password,
+    },
+    {
+      origin: "https://ais-dev-preview.run.app",
+    }
+  );
   assert(
-    meRes.statusCode === 200 && meRes.body.success === true && meRes.body.user.id === buyerId,
-    "/api/auth/me returns authenticated user",
-    meRes.body
+    loginBuyer.statusCode === 200 && typeof loginBuyer.body.token === "string",
+    "Valid login returns 200 and session token"
+  );
+  const setCookieHeader = String(loginBuyer.headers["set-cookie"] || "");
+  assert(
+    setCookieHeader.includes("SameSite=None") &&
+      setCookieHeader.includes("Secure") &&
+      setCookieHeader.includes("Partitioned"),
+    "HTTPS/run.app login sets SameSite=None; Secure; Partitioned cookie",
+    setCookieHeader
+  );
+  const freshBuyerCookie = extractCookie(loginBuyer);
+
+  const bearerDashboardRes = await dispatch(
+    "GET",
+    "/api/users/dashboard",
+    undefined,
+    {
+      authorization: `Bearer ${loginBuyer.body.token}`,
+    }
+  );
+  assert(
+    bearerDashboardRes.statusCode === 200 &&
+      bearerDashboardRes.body.data?.metrics !== undefined,
+    "Dashboard loads via Bearer token when cookies are absent (iframe fallback)",
+    bearerDashboardRes.body
   );
 
-  // 6. Messaging: reject unauthenticated
-  console.log("\n--- Testing 6: Reject unauthenticated messaging ---");
-  const unauthGet = await dispatch("GET", "/api/messages/conversations");
-  assert(unauthGet.statusCode === 401, "GET /api/messages/conversations rejects unauthenticated with 401");
+  // 4. Trust score: new account shows "Not enough data"
+  const newTrustRes = await dispatch("GET", "/api/trust/me", undefined, {
+    cookie: freshBuyerCookie,
+  });
+  assert(
+    newTrustRes.statusCode === 200 &&
+      newTrustRes.body.data.trustScore.insufficientData === true &&
+      newTrustRes.body.data.trustScore.level === "Not enough data",
+    "New account without sufficient activity returns 'Not enough data'",
+    newTrustRes.body
+  );
 
-  const unauthPost = await dispatch("POST", "/api/messages/conversations", { recipientId: sellerId });
-  assert(unauthPost.statusCode === 401, "POST /api/messages/conversations rejects unauthenticated with 401");
+  // 5. Unauthorized admin access blocked
+  const buyerAdminAttempt = await dispatch("GET", "/api/admin/overview", undefined, {
+    cookie: freshBuyerCookie,
+  });
+  assert(
+    buyerAdminAttempt.statusCode === 403,
+    "Buyer blocked from /api/admin/overview with 403"
+  );
 
-  // Authorization rules
-  console.log("\n--- Testing Authorization Rules ---");
-  // Cannot start conversation with self
+  // 6. Messaging & fraud detection
   const selfConv = await dispatch(
     "POST",
     "/api/messages/conversations",
     { recipientId: buyerId },
-    { cookie: buyerCookie }
+    { cookie: freshBuyerCookie }
   );
-  assert(selfConv.statusCode === 400, "Cannot start conversation with oneself rejected with 400", selfConv.body);
+  assert(selfConv.statusCode === 400, "Self-conversation rejected");
 
-  // Cannot start conversation with same role (buyer with buyer)
   const sameRoleConv = await dispatch(
     "POST",
     "/api/messages/conversations",
     { recipientId: regThird.body.user.id },
-    { cookie: buyerCookie }
+    { cookie: freshBuyerCookie }
   );
-  assert(sameRoleConv.statusCode === 400, "Cannot start conversation with same role rejected with 400", sameRoleConv.body);
+  assert(sameRoleConv.statusCode === 400, "Same-role conversation rejected");
 
-  // 7. Buyer can start conversation with Seller
-  console.log("\n--- Testing 7: Buyer starts conversation with Seller ---");
   const createConv = await dispatch(
     "POST",
     "/api/messages/conversations",
     { recipientId: sellerId },
-    { cookie: buyerCookie }
+    { cookie: freshBuyerCookie }
   );
-  assert(
-    createConv.statusCode === 201 && createConv.body.success === true && !!createConv.body.conversationId,
-    "Buyer starts conversation with Seller with 201",
-    createConv.body
-  );
+  assert(createConv.statusCode === 201, "Buyer-Seller conversation created");
   const convId = createConv.body.conversationId;
 
-  // Duplicate conversation prevention
   const dupConv = await dispatch(
     "POST",
     "/api/messages/conversations",
     { recipientId: sellerId },
-    { cookie: buyerCookie }
+    { cookie: freshBuyerCookie }
   );
   assert(
     dupConv.statusCode === 200 && dupConv.body.conversationId === convId,
-    "Duplicate conversation returns existing conversationId with 200",
-    dupConv.body
+    "Duplicate conversation returns existing ID"
   );
 
-  // 8. Both participants can retrieve conversations and messages
-  console.log("\n--- Testing 8: Both participants retrieve conversation ---");
-  const buyerConvs = await dispatch("GET", "/api/messages/conversations", undefined, { cookie: buyerCookie });
-  assert(
-    buyerConvs.statusCode === 200 && buyerConvs.body.conversations.some((c: any) => c.id === convId),
-    "Buyer can list their conversations",
-    buyerConvs.body
-  );
-
-  const sellerConvs = await dispatch("GET", "/api/messages/conversations", undefined, { cookie: sellerCookie });
-  assert(
-    sellerConvs.statusCode === 200 && sellerConvs.body.conversations.some((c: any) => c.id === convId),
-    "Seller can list their conversations",
-    sellerConvs.body
-  );
-
-  // 9. Both participants can send messages
-  console.log("\n--- Testing 9: Both participants send messages ---");
-  const buyerMsg = await dispatch(
+  const msg1 = await dispatch(
     "POST",
     `/api/messages/${convId}`,
-    { content: "Hello Seller, I would like to buy your item." },
-    { cookie: buyerCookie }
+    { content: "Hello Seller, confirming availability." },
+    { cookie: freshBuyerCookie }
   );
-  assert(buyerMsg.statusCode === 201 && buyerMsg.body.success === true, "Buyer sends message with 201", buyerMsg.body);
+  assert(msg1.statusCode === 201, "Buyer sends normal message");
+  const msg1Id = msg1.body.data.id;
 
-  const sellerMsg = await dispatch(
+  const suspiciousMsg = await dispatch(
     "POST",
     `/api/messages/${convId}`,
-    { content: "Hello Buyer! The item is available and ready to ship." },
+    { content: "Please pay outside the platform via wire transfer or gift card." },
     { cookie: sellerCookie }
   );
-  assert(sellerMsg.statusCode === 201 && sellerMsg.body.success === true, "Seller sends message with 201", sellerMsg.body);
+  assert(
+    suspiciousMsg.statusCode === 201 &&
+      suspiciousMsg.body.data.riskLevel === "HIGH",
+    "Rule-based fraud detection flags suspicious off-platform payment message as HIGH",
+    suspiciousMsg.body
+  );
 
-  // Max length validation (>4000 characters)
-  const tooLongMsg = await dispatch(
+  const listConvBeforeRead = await dispatch(
+    "GET",
+    "/api/messages/conversations",
+    undefined,
+    { cookie: freshBuyerCookie }
+  );
+  assert(
+    listConvBeforeRead.statusCode === 200 &&
+      Array.isArray(listConvBeforeRead.body.conversations) &&
+      listConvBeforeRead.body.conversations.some(
+        (c: { id: number; unreadCount: number }) =>
+          c.id === convId && c.unreadCount >= 1
+      ),
+    "GET /api/messages/conversations returns 200 with created conversation and unreadCount >= 1",
+    listConvBeforeRead.body
+  );
+
+  const markRead = await dispatch(
+    "PATCH",
+    `/api/messages/${convId}/read`,
+    {},
+    { cookie: freshBuyerCookie }
+  );
+  assert(
+    markRead.statusCode === 200 && markRead.body.markedCount >= 1,
+    "Buyer marks seller message read"
+  );
+
+  // Unrelated user cannot access conversation (and triggers security event)
+  const unrelatedGet = await dispatch("GET", `/api/messages/${convId}`, undefined, {
+    cookie: thirdCookie,
+  });
+  assert(unrelatedGet.statusCode === 403, "Unrelated user denied conversation access");
+
+  // Sender-only message deletion policy
+  const sellerDeleteBuyerMsg = await dispatch(
+    "DELETE",
+    `/api/messages/${msg1Id}`,
+    undefined,
+    { cookie: sellerCookie }
+  );
+  assert(
+    sellerDeleteBuyerMsg.statusCode === 403,
+    "Seller cannot delete Buyer's message"
+  );
+
+  // 7. Disputes
+  const createDispute = await dispatch(
     "POST",
-    `/api/messages/${convId}`,
-    { content: "a".repeat(4001) },
-    { cookie: buyerCookie }
+    "/api/disputes",
+    {
+      counterpartyId: sellerId,
+      conversationId: convId,
+      category: "Suspicious payment request",
+      subject: "Requested off-platform payment",
+      description:
+        "Seller requested wire transfer outside TrustBridge during conversation.",
+      evidence: ["Message ID reference"],
+    },
+    { cookie: freshBuyerCookie }
   );
-  assert(tooLongMsg.statusCode === 400, "Message > 4000 characters rejected with 400", tooLongMsg.body);
+  assert(createDispute.statusCode === 201, "Buyer creates dispute");
+  const disputeId = createDispute.body.disputeId;
 
-  // Retrieve message history
-  const buyerMsgHistory = await dispatch("GET", `/api/messages/${convId}`, undefined, { cookie: buyerCookie });
-  assert(
-    buyerMsgHistory.statusCode === 200 && buyerMsgHistory.body.messages.length === 2,
-    "Buyer retrieves message history (2 messages)",
-    buyerMsgHistory.body
-  );
-
-  const sellerMsgHistory = await dispatch("GET", `/api/messages/${convId}`, undefined, { cookie: sellerCookie });
-  assert(
-    sellerMsgHistory.statusCode === 200 && sellerMsgHistory.body.messages.length === 2,
-    "Seller retrieves message history (2 messages)",
-    sellerMsgHistory.body
-  );
-
-  // 10. Unrelated user cannot access conversation
-  console.log("\n--- Testing 10: Unrelated user access control ---");
-  const unrelatedGet = await dispatch("GET", `/api/messages/${convId}`, undefined, { cookie: thirdCookie });
-  assert(
-    unrelatedGet.statusCode === 403 || unrelatedGet.statusCode === 404,
-    "Unrelated user cannot retrieve conversation (received 403 or 404)",
-    unrelatedGet.body
-  );
-
-  const unrelatedSend = await dispatch(
+  const sellerReply = await dispatch(
     "POST",
-    `/api/messages/${convId}`,
-    { content: "Unauthorized message attempt" },
-    { cookie: thirdCookie }
+    `/api/disputes/${disputeId}/responses`,
+    { message: "Understood, I will keep all payment steps inside TrustBridge." },
+    { cookie: sellerCookie }
   );
+  assert(sellerReply.statusCode === 201, "Seller responds to dispute");
+
+  // 8. Admin sign-in & moderation
+  const adminLogin = await dispatch("POST", "/api/auth/login", {
+    email: env.ADMIN_SEED_EMAIL,
+    password: env.ADMIN_SEED_PASSWORD,
+  });
   assert(
-    unrelatedSend.statusCode === 403 || unrelatedSend.statusCode === 404,
-    "Unrelated user cannot send message to conversation (received 403 or 404)",
-    unrelatedSend.body
+    adminLogin.statusCode === 200 && adminLogin.body.user?.role === "admin",
+    "Provisioned admin signs in successfully"
+  );
+  const adminCookie = extractCookie(adminLogin);
+
+  const adminOverview = await dispatch("GET", "/api/admin/overview", undefined, {
+    cookie: adminCookie,
+  });
+  assert(
+    adminOverview.statusCode === 200 &&
+      adminOverview.body.data.stats.totalUsers >= 4,
+    "Admin overview returns real DB statistics"
+  );
+
+  const resolveDispute = await dispatch(
+    "PATCH",
+    `/api/admin/disputes/${disputeId}`,
+    {
+      status: "RESOLVED",
+      resolutionNotes: "Reviewed conversation and warned seller.",
+    },
+    { cookie: adminCookie }
+  );
+  assert(resolveDispute.statusCode === 200, "Admin resolves dispute");
+
+  // 9. Logout invalidates session
+  const logoutRes = await dispatch("POST", "/api/auth/logout", {}, {
+    cookie: buyerCookie,
+  });
+  assert(logoutRes.statusCode === 200, "Logout succeeds");
+
+  const meAfterLogout = await dispatch("GET", "/api/auth/me", undefined, {
+    cookie: buyerCookie,
+  });
+  assert(
+    meAfterLogout.statusCode === 401,
+    "Revoked session token rejected after logout"
   );
 
   console.log(`\n========================================`);

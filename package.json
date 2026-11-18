@@ -9,14 +9,16 @@
     "shared"
   ],
   "scripts": {
-    "dev": "npm run dev --workspaces",
+    "dev": "npm run build:frontend && npm run dev --workspace=backend",
     "dev:frontend": "npm run dev --workspace=frontend",
     "dev:backend": "npm run dev --workspace=backend",
-    "build": "npm run build --workspaces",
+    "build": "npm run build:frontend && npm run build:backend",
     "build:frontend": "npm run build --workspace=frontend",
     "build:backend": "npm run build --workspace=backend",
-    "test": "npm run test --workspaces",
-    "lint": "npm run lint --workspaces"
+    "typecheck": "npm run typecheck --workspace=backend && tsc -b frontend/tsconfig.json",
+    "start": "npm run start --workspace=backend",
+    "test": "npx --yes tsx --test backend/src/services/*.test.ts && npx --yes tsx backend/tests/test_all.ts",
+    "lint": "npm run lint --workspace=frontend"
   },
   "keywords": [
     "trustbridge",
@@ -28,8 +30,6 @@
   "author": "",
   "license": "ISC",
   "allowScripts": {
-    "argon2@0.45.2": true,
-    "better-sqlite3@13.1.1": true,
     "esbuild@0.28.2": true
   }
 }

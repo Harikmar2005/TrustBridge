@@ -1,24 +1,27 @@
 import { Router } from "express";
 import {
   createConversation,
+  deleteMessage,
   getConversations,
   getMessages,
+  markConversationRead,
   sendMessage,
+  translateMessage,
 } from "../controllers/messages.controller";
 import { authenticate } from "../middleware/authenticate";
 
 const router = Router();
 
-// Protect all messaging routes with authentication
 router.use(authenticate);
 
-// Conversations endpoints
 router.get("/conversations", getConversations);
 router.post("/conversations", createConversation);
 
-// Message history & send endpoints
+router.patch("/:id/read", markConversationRead);
+router.post("/:messageId/translate", translateMessage);
+router.delete("/:messageId", deleteMessage);
+
 router.get("/:id", getMessages);
 router.post("/:id", sendMessage);
 
 export default router;
-

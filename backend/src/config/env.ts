@@ -2,20 +2,39 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { z } from 'zod';
 
-// Attempt to load .env from current directory or backend root
-dotenv.config();
-dotenv.config({ path: path.resolve(__dirname, '../../.env') });
-dotenv.config({ path: path.resolve(__dirname, '../.env') });
+const dotenvResults = [
+  dotenv.config(),
+  dotenv.config({ path: path.resolve(__dirname, '../../.env') }),
+  dotenv.config({ path: path.resolve(__dirname, '../../../.env') }),
+];
+
+const explicitDotenvPort = dotenvResults.find((r) => r.parsed?.PORT)?.parsed?.PORT;
+const resolvedPort =
+  process.env.BACKEND_PORT ||
+  explicitDotenvPort ||
+  (process.env.PORT && process.env.PORT !== '8080' ? process.env.PORT : '3000');
 
 const envSchema = z.object({
-  PORT: z.string().default('5000').transform((val) => parseInt(val, 10)),
+  PORT: z.string().default('3000').transform((val) => parseInt(val, 10)),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   FRONTEND_URL: z.string().default('http://localhost:3000'),
-  JWT_SECRET: z.string().min(32, 'JWT_SECRET must be at least 32 characters long'),
+  JWT_SECRET: z
+    .string()
+    .min(32, 'JWT_SECRET must be at least 32 characters long')
+    .default('trustbridge-dev-secret-key-change-in-production-32chars'),
+  JWT_EXPIRES_IN: z.string().default('7d'),
   DATABASE_PATH: z.string().default('./database/trustbridge.db'),
+  ADMIN_SEED_EMAIL: z.string().email().default('admin@trustbridge.local'),
+  ADMIN_SEED_PASSWORD: z.string().min(12).default('TrustBridgeAdmin!2026'),
+  TRANSLATION_PROVIDER: z.enum(['none', 'libretranslate']).default('none'),
+  TRANSLATION_API_URL: z.string().optional().default(''),
+  TRANSLATION_API_KEY: z.string().optional().default(''),
 });
 
-const parsedEnv = envSchema.safeParse(process.env);
+const parsedEnv = envSchema.safeParse({
+  ...process.env,
+  PORT: resolvedPort,
+});
 
 if (!parsedEnv.success) {
   console.error('❌ Invalid environment configuration:');
@@ -24,4 +43,3 @@ if (!parsedEnv.success) {
 }
 
 export const env = parsedEnv.data;
-
