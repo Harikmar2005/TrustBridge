@@ -421,6 +421,66 @@ async function runTests() {
     "Revoked session token rejected after logout"
   );
 
+  // 10. Messaging security & validation edge cases
+  const unauthConvs = await dispatch("GET", "/api/messages/conversations");
+  assert(
+    unauthConvs.statusCode === 401,
+    "Unauthenticated GET /api/messages/conversations returns 401"
+  );
+
+  const unauthSend = await dispatch("POST", `/api/messages/${convId}`, {
+    content: "Unauthorized attempt",
+  });
+  assert(
+    unauthSend.statusCode === 401,
+    "Unauthenticated POST /api/messages/:id returns 401"
+  );
+
+  const emptyMsg = await dispatch(
+    "POST",
+    `/api/messages/${convId}`,
+    { content: "   " },
+    { cookie: freshBuyerCookie }
+  );
+  assert(emptyMsg.statusCode === 400, "Empty whitespace message rejected with 400");
+
+  const longMsg = await dispatch(
+    "POST",
+    `/api/messages/${convId}`,
+    { content: "a".repeat(4001) },
+    { cookie: freshBuyerCookie }
+  );
+  assert(longMsg.statusCode === 400, "Message > 4000 characters rejected with 400");
+
+  const missingConvSend = await dispatch(
+    "POST",
+    "/api/messages/00000000-0000-0000-0000-000000000000",
+    { content: "Hello" },
+    { cookie: freshBuyerCookie }
+  );
+  assert(
+    missingConvSend.statusCode === 404,
+    "Nonexistent conversation returns 404"
+  );
+
+  // 11. Simulate backend restart: close SQLite db and re-initialize from disk
+  db.close();
+  await initDatabase();
+
+  const persistedMsgsRes = await dispatch(
+    "GET",
+    `/api/messages/${convId}`,
+    undefined,
+    { cookie: freshBuyerCookie }
+  );
+  assert(
+    persistedMsgsRes.statusCode === 200 &&
+      Array.isArray(persistedMsgsRes.body.messages) &&
+      persistedMsgsRes.body.messages.length >= 2,
+    "Messages persist in SQLite across database close and reopen (restart simulation)",
+    persistedMsgsRes.body
+  );
+
   console.log(`\n========================================`);
   console.log(`RESULTS: ${passed} passed, ${failed} failed`);
   console.log(`========================================`);

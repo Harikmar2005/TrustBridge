@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   AlertTriangle,
@@ -85,14 +85,11 @@ export default function MessagesPage() {
     };
   }, [routeConvId]);
 
-  async function loadConversations(selectFirstIfMissing = false) {
+  const loadConversations = useCallback(async () => {
     try {
       const res = await getConversations();
       const list = (res.conversations as ConversationSummary[]) || [];
       setConversations(list);
-      if (selectFirstIfMissing && !routeConvId && !selectedId && list.length > 0) {
-        setSelectedId(list[0].id);
-      }
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Unable to load conversations."
@@ -100,7 +97,7 @@ export default function MessagesPage() {
     } finally {
       setLoadingConvs(false);
     }
-  }
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -134,6 +131,11 @@ export default function MessagesPage() {
     }
     let active = true;
     void (async () => {
+      await Promise.resolve();
+      if (!active) return;
+      setLoadingMsgs(true);
+      setError("");
+      setSafetyNotice("");
       try {
         const res = await getConversationMessages(selectedId);
         if (!active) return;
@@ -148,6 +150,7 @@ export default function MessagesPage() {
         }
       } catch (err) {
         if (active) {
+          setMessages([]);
           setError(
             err instanceof Error ? err.message : "Unable to load messages."
           );
@@ -172,7 +175,7 @@ export default function MessagesPage() {
 
     const onNewMessage = (incoming: ChatMessage) => {
       if (incoming.conversationId !== selectedId) {
-        void loadConversations(false);
+        void loadConversations();
         return;
       }
       setMessages((prev) => {
@@ -182,7 +185,7 @@ export default function MessagesPage() {
       if (incoming.senderId !== user?.id) {
         void markConversationRead(selectedId);
       }
-      void loadConversations(false);
+      void loadConversations();
     };
 
     const onRead = (evt: { conversationId: string; readerId: string }) => {
@@ -203,7 +206,7 @@ export default function MessagesPage() {
             : m
         )
       );
-      void loadConversations(false);
+      void loadConversations();
     };
 
     socket.on("message:new", onNewMessage);
@@ -216,7 +219,7 @@ export default function MessagesPage() {
       socket.off("conversation:read", onRead);
       socket.off("message:deleted", onDeleted);
     };
-  }, [socket, selectedId, user?.id]);
+  }, [socket, selectedId, user?.id, loadConversations]);
 
   const activeConversation = useMemo(
     () => conversations.find((c) => c.id === selectedId) || null,
@@ -259,7 +262,7 @@ export default function MessagesPage() {
           prev.some((m) => m.id === created.id) ? prev : [...prev, created]
         );
       }
-      await loadConversations(false);
+      await loadConversations();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to send message.");
     } finally {
@@ -277,7 +280,7 @@ export default function MessagesPage() {
             : m
         )
       );
-      await loadConversations(false);
+      await loadConversations();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to remove message.");
     }
@@ -384,17 +387,24 @@ export default function MessagesPage() {
               <p className="mt-2 text-xs font-medium text-[#102A3A]">
                 No conversations found
               </p>
-              <Link
-                to="/sellers"
-                className="mt-2 inline-block text-xs font-semibold text-[#167C91] hover:underline"
-              >
-                Explore Seller Directory
-              </Link>
+              {user?.role !== "seller" ? (
+                <Link
+                  to="/sellers"
+                  className="mt-2 inline-block text-xs font-semibold text-[#167C91] hover:underline"
+                >
+                  Explore Seller Directory
+                </Link>
+              ) : (
+                <p className="mt-1 text-[11px] text-[#64748B]">
+                  Buyer inquiries will appear here when a buyer starts a thread.
+                </p>
+              )}
             </div>
           ) : (
             <ul className="divide-y divide-slate-100">
               {filteredConversations.map((conv) => {
                 const active = conv.id === selectedId;
+                const timestamp = conv.lastMessageAt || conv.updatedAt;
                 return (
                   <li key={conv.id}>
                     <button
@@ -411,11 +421,21 @@ export default function MessagesPage() {
                         <span className="truncate text-sm font-semibold text-[#102A3A]">
                           {conv.participantBusinessName || conv.participantName}
                         </span>
-                        {conv.unreadCount > 0 && (
-                          <span className="rounded-full bg-[#167C91] px-2 py-0.5 text-[11px] font-semibold text-white tabular-nums">
-                            {conv.unreadCount}
-                          </span>
-                        )}
+                        <div className="flex shrink-0 items-center gap-1.5">
+                          {timestamp && (
+                            <span className="text-[11px] text-[#64748B] tabular-nums">
+                              {new Date(timestamp).toLocaleTimeString([], {
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              })}
+                            </span>
+                          )}
+                          {conv.unreadCount > 0 && (
+                            <span className="rounded-full bg-[#167C91] px-2 py-0.5 text-[11px] font-semibold text-white tabular-nums">
+                              {conv.unreadCount}
+                            </span>
+                          )}
+                        </div>
                       </div>
                       <p className="text-[11px] text-[#64748B]">
                         {conv.participantName} · {conv.participantRole}
@@ -436,13 +456,29 @@ export default function MessagesPage() {
       <section className="flex min-w-0 flex-1 flex-col bg-[#F5F8FB]">
         {!activeConversation ? (
           <div className="flex flex-1 flex-col items-center justify-center p-8 text-center">
-            <MessageSquare className="h-10 w-10 text-slate-300" />
-            <h2 className="mt-3 text-base font-semibold text-[#102A3A]">
-              Select a conversation
-            </h2>
-            <p className="mt-1 max-w-sm text-xs text-[#64748B]">
-              Choose a thread on the left or start a new conversation from the Seller Directory.
-            </p>
+            {loadingMsgs ? (
+              <Loader2 className="h-7 w-7 animate-spin text-[#167C91]" />
+            ) : error ? (
+              <div
+                role="alert"
+                className="max-w-md rounded-xl border border-rose-200 bg-rose-50 px-5 py-4 text-sm text-[#D84B4B]"
+              >
+                <p className="font-semibold">Unable to open conversation</p>
+                <p className="mt-1 text-xs">{error}</p>
+              </div>
+            ) : (
+              <>
+                <MessageSquare className="h-10 w-10 text-slate-300" />
+                <h2 className="mt-3 text-base font-semibold text-[#102A3A]">
+                  Select a conversation
+                </h2>
+                <p className="mt-1 max-w-sm text-xs text-[#64748B]">
+                  {user?.role === "seller"
+                    ? "Choose a buyer thread on the left to review inquiries and respond."
+                    : "Choose a thread on the left or start a new conversation from the Seller Directory."}
+                </p>
+              </>
+            )}
           </div>
         ) : (
           <>

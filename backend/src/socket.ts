@@ -112,6 +112,12 @@ export function initSocketServer(httpServer: HttpServer): SocketIOServer {
       }
     });
 
+    socket.on("conversation:leave", (conversationId: string) => {
+      if (typeof conversationId === "string" && conversationId) {
+        socket.leave(`conv:${conversationId}`);
+      }
+    });
+
     socket.on(
       "message:send",
       (
