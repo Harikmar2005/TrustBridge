@@ -1,0 +1,35 @@
+{
+  "name": "trustbridge",
+  "version": "1.0.0",
+  "private": true,
+  "description": "TrustBridge - Multi-tenant platform with fraud detection, real-time communication, and dispute management",
+  "workspaces": [
+    "frontend",
+    "backend",
+    "shared"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspaces",
+    "dev:frontend": "npm run dev --workspace=frontend",
+    "dev:backend": "npm run dev --workspace=backend",
+    "build": "npm run build --workspaces",
+    "build:frontend": "npm run build --workspace=frontend",
+    "build:backend": "npm run build --workspace=backend",
+    "test": "npm run test --workspaces",
+    "lint": "npm run lint --workspaces"
+  },
+  "keywords": [
+    "trustbridge",
+    "escrow",
+    "fraud-detection",
+    "nexconn",
+    "chat"
+  ],
+  "author": "",
+  "license": "ISC",
+  "allowScripts": {
+    "argon2@0.45.2": true,
+    "better-sqlite3@13.1.1": true,
+    "esbuild@0.28.2": true
+  }
+}
