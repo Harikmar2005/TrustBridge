@@ -4,9 +4,8 @@ import initSqlJs, {
 } from "sql.js";
 import fs from "fs";
 import path from "path";
-import crypto from "crypto";
-import { hash } from "@node-rs/argon2";
 import { env } from "./env";
+import { seedDemoAccountsIfEnabled } from "./seeding";
 
 const dbPath = path.isAbsolute(env.DATABASE_PATH)
   ? env.DATABASE_PATH
@@ -173,6 +172,7 @@ class PersistentDatabase implements DatabaseAdapter {
           content TEXT NOT NULL,
           originalLanguage TEXT DEFAULT 'en',
           riskLevel TEXT NOT NULL DEFAULT 'NONE',
+          nexconnMessageId TEXT,
           isDeleted INTEGER NOT NULL DEFAULT 0,
           deletedAt TEXT,
           createdAt TEXT NOT NULL,
@@ -484,12 +484,15 @@ class PersistentDatabase implements DatabaseAdapter {
         "INSERT INTO schema_migrations (version, name, appliedAt) VALUES (?, ?, ?)"
       ).run(2, "trust_security_disputes_sessions_audit", new Date().toISOString());
     }
+
+    // Non-destructive additive column upgrade for Nexconn message ID tracking
+    this.addColumnIfMissing("messages", "nexconnMessageId", "TEXT");
   }
 
   private async seedInitialData(): Promise<void> {
     const now = new Date().toISOString();
 
-    // Ensure default platform policies exist
+    // Ensure default platform policies exist (non-credential configuration defaults)
     const policyCount =
       this.prepare<[], { cnt: number }>(
         "SELECT COUNT(*) AS cnt FROM platform_policies"
@@ -535,245 +538,21 @@ class PersistentDatabase implements DatabaseAdapter {
       }
     }
 
-    // Ensure provisioned administrator exists
-    const existingAdmin = this.prepare<[], { id: string }>(
-      "SELECT id FROM users WHERE role = 'admin' LIMIT 1"
-    ).get();
+    // Optional development-only demo account seeding (disabled by default, forbidden in production)
+    const seedResult = await seedDemoAccountsIfEnabled(this, {
+      nodeEnv: env.NODE_ENV,
+      enableDemoSeed: env.ENABLE_DEMO_SEED,
+      adminEmail: env.DEMO_ADMIN_EMAIL,
+      adminPassword: env.DEMO_ADMIN_PASSWORD,
+      buyerEmail: env.DEMO_BUYER_EMAIL,
+      buyerPassword: env.DEMO_BUYER_PASSWORD,
+      sellerEmail: env.DEMO_SELLER_EMAIL,
+      sellerPassword: env.DEMO_SELLER_PASSWORD,
+    });
 
-    if (!existingAdmin) {
-      const adminId = crypto.randomUUID();
-      const adminHash = await hash(env.ADMIN_SEED_PASSWORD);
-      this.prepare<[string, string, string, string, number, string, string]>(
-        `INSERT INTO users (id, fullName, email, passwordHash, role, status, emailVerified, createdAt, updatedAt)
-         VALUES (?, ?, ?, ?, 'admin', 'active', ?, ?, ?)`
-      ).run(
-        adminId,
-        "TrustBridge Security Admin",
-        env.ADMIN_SEED_EMAIL.toLowerCase(),
-        adminHash,
-        1,
-        now,
-        now
-      );
-    }
-
-    // Seed sample marketplace sellers/buyer if no seller profiles exist yet
-    const sellerProfileCount =
-      this.prepare<[], { cnt: number }>(
-        "SELECT COUNT(*) AS cnt FROM seller_profiles"
-      ).get()?.cnt ?? 0;
-
-    if (sellerProfileCount === 0) {
-      const olderDate = new Date(Date.now() - 45 * 24 * 60 * 60 * 1000).toISOString();
-      const midDate = new Date(Date.now() - 20 * 24 * 60 * 60 * 1000).toISOString();
-
-      const buyerHash = await hash("TrustBridgeBuyer!2026");
-      const sellerHash = await hash("TrustBridgeSeller!2026");
-
-      const ensureUser = (params: {
-        fullName: string;
-        email: string;
-        passwordHash: string;
-        role: "buyer" | "seller";
-        emailVerified: number;
-        createdAt: string;
-      }): string => {
-        const existing = this.prepare<[string], { id: string }>(
-          "SELECT id FROM users WHERE email = ?"
-        ).get(params.email);
-        if (existing) return existing.id;
-        const newId = crypto.randomUUID();
-        this.prepare<
-          [string, string, string, string, string, number, string, string]
-        >(
-          `INSERT INTO users (id, fullName, email, passwordHash, role, status, emailVerified, createdAt, updatedAt)
-           VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?)`
-        ).run(
-          newId,
-          params.fullName,
-          params.email,
-          params.passwordHash,
-          params.role,
-          params.emailVerified,
-          params.createdAt,
-          now
-        );
-        return newId;
-      };
-
-      const buyerId = ensureUser({
-        fullName: "Jordan Mercer",
-        email: "buyer@trustbridge.local",
-        passwordHash: buyerHash,
-        role: "buyer",
-        emailVerified: 1,
-        createdAt: olderDate,
-      });
-      const seller1Id = ensureUser({
-        fullName: "Elena Vance",
-        email: "elena@vanceaudio.local",
-        passwordHash: sellerHash,
-        role: "seller",
-        emailVerified: 1,
-        createdAt: olderDate,
-      });
-      const seller2Id = ensureUser({
-        fullName: "Marcus Chen",
-        email: "marcus@harborline.local",
-        passwordHash: sellerHash,
-        role: "seller",
-        emailVerified: 1,
-        createdAt: midDate,
-      });
-      const seller3Id = ensureUser({
-        fullName: "Priya Nair",
-        email: "priya@meridiantextiles.local",
-        passwordHash: sellerHash,
-        role: "seller",
-        emailVerified: 0,
-        createdAt: now,
-      });
-
-      const insertSellerProfile = this.prepare<
-        [string, string, string, string, string, string, string, string, string, number, string, string]
-      >(
-        `INSERT OR IGNORE INTO seller_profiles (id, userId, businessName, category, location, description, website, verificationStatus, responseTimeLabel, completedTransactions, createdAt, updatedAt)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      );
-
-      insertSellerProfile.run(
-        crypto.randomUUID(),
-        seller1Id,
-        "Vance Precision Audio",
-        "Pro Electronics",
-        "Portland, OR",
-        "Authorized studio monitors, DACs, and calibrated acoustic gear with serialized provenance documentation.",
-        "https://vanceaudio.example",
-        "verified",
-        "Under 2 hours",
-        18,
-        olderDate,
-        now
-      );
-
-      insertSellerProfile.run(
-        crypto.randomUUID(),
-        seller2Id,
-        "Harborline Craft Goods",
-        "Home & Workshop",
-        "Seattle, WA",
-        "Small-batch architectural hardware, brass fittings, and custom joinery components shipped with insured tracking.",
-        "https://harborline.example",
-        "verified",
-        "Within 4 hours",
-        7,
-        midDate,
-        now
-      );
-
-      insertSellerProfile.run(
-        crypto.randomUUID(),
-        seller3Id,
-        "Meridian Textile Studio",
-        "Apparel & Textiles",
-        "Austin, TX",
-        "Organic linen bolts and natural-dyed upholstery fabrics for independent studios.",
-        "",
-        "pending",
-        "Within 24 hours",
-        0,
-        now,
-        now
-      );
-
-      // Seed one real buyer-seller conversation with messages so initial UX is rich & inspectable
-      const convId = crypto.randomUUID();
-      this.prepare<[string, string, string, string, string]>(
-        `INSERT INTO conversations (id, buyerId, sellerId, status, createdAt, updatedAt)
-         VALUES (?, ?, ?, 'active', ?, ?)`
-      ).run(convId, buyerId, seller1Id, midDate, now);
-
-      const m1 = crypto.randomUUID();
-      const m2 = crypto.randomUUID();
-      this.prepare<[string, string, string, string, string]>(
-        `INSERT INTO messages (id, conversationId, senderId, content, createdAt)
-         VALUES (?, ?, ?, ?, ?)`
-      ).run(
-        m1,
-        convId,
-        buyerId,
-        "Hi Elena, could you confirm the serial verification certificate is included with the reference monitors?",
-        midDate
-      );
-      this.prepare<[string, string, string, string, string]>(
-        `INSERT INTO messages (id, conversationId, senderId, content, createdAt)
-         VALUES (?, ?, ?, ?, ?)`
-      ).run(
-        m2,
-        convId,
-        seller1Id,
-        "Hello Jordan! Yes, the factory calibration report and matching serial certificate ship inside the sealed case.",
-        now
-      );
-
-      // Seed trust score snapshots for seeded accounts
-      const insertTrust = this.prepare<
-        [string, number | null, string, string, number, string]
-      >(
-        `INSERT OR REPLACE INTO trust_scores (userId, score, level, factorsJson, insufficientData, lastUpdated)
-         VALUES (?, ?, ?, ?, ?, ?)`
-      );
-
-      insertTrust.run(
-        seller1Id,
-        90,
-        "Excellent",
-        JSON.stringify([
-          { name: "Profile completeness", impact: "positive", points: 25, detail: "Business profile 100% complete" },
-          { name: "Verified seller & email", impact: "positive", points: 20, detail: "Account verification confirmed" },
-          { name: "Account age", impact: "positive", points: 15, detail: "45 days active on platform" },
-          { name: "Completed transactions", impact: "positive", points: 30, detail: "18 fulfilled interactions with zero confirmed violations" },
-        ]),
-        0,
-        now
-      );
-
-      insertTrust.run(
-        seller2Id,
-        78,
-        "Good",
-        JSON.stringify([
-          { name: "Profile completeness", impact: "positive", points: 25, detail: "Business profile complete" },
-          { name: "Verified seller & email", impact: "positive", points: 20, detail: "Account verification confirmed" },
-          { name: "Account age", impact: "positive", points: 10, detail: "20 days active on platform" },
-          { name: "Completed transactions", impact: "positive", points: 23, detail: "7 fulfilled interactions" },
-        ]),
-        0,
-        now
-      );
-
-      insertTrust.run(
-        seller3Id,
-        null,
-        "Not enough data",
-        JSON.stringify([
-          { name: "Insufficient interaction history", impact: "neutral", points: 0, detail: "New seller account awaiting verified interactions" },
-        ]),
-        1,
-        now
-      );
-
-      insertTrust.run(
-        buyerId,
-        76,
-        "Good",
-        JSON.stringify([
-          { name: "Verified email", impact: "positive", points: 20, detail: "Email verified" },
-          { name: "Account age", impact: "positive", points: 20, detail: "45 days active" },
-          { name: "Communication history", impact: "positive", points: 36, detail: "Constructive buyer messaging with zero violations" },
-        ]),
-        0,
-        now
+    if (seedResult.seeded) {
+      console.log(
+        `Development demo accounts seeded (${seedResult.createdUsers.length} created, ${seedResult.skippedExisting.length} preserved).`
       );
     }
   }

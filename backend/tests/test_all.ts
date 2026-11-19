@@ -2,7 +2,8 @@ import { IncomingMessage, ServerResponse } from "http";
 import { Socket } from "net";
 import app from "../src/app";
 import { db, initDatabase } from "../src/config/database";
-import { env } from "../src/config/env";
+import { provisionAdminAccount } from "../src/config/seeding";
+import { toNexconnUserId } from "../src/services/nexconn.service";
 
 interface TestResponse {
   statusCode: number;
@@ -107,6 +108,15 @@ async function runTests() {
 
   const fkRow = db.prepare<[], { foreign_keys: number }>("PRAGMA foreign_keys").get();
   assert(fkRow?.foreign_keys === 1, "SQLite foreign keys are enabled");
+
+  const initialUserCount =
+    db.prepare<[], { cnt: number }>("SELECT COUNT(*) AS cnt FROM users").get()
+      ?.cnt ?? -1;
+  assert(
+    initialUserCount === 0,
+    "Fresh database initialization seeds zero default accounts when ENABLE_DEMO_SEED is disabled",
+    { initialUserCount }
+  );
 
   // 2. Registration & RBAC guard
   const rand = Date.now().toString().slice(-6);
@@ -377,10 +387,18 @@ async function runTests() {
   );
   assert(sellerReply.statusCode === 201, "Seller responds to dispute");
 
-  // 8. Admin sign-in & moderation
+  // 8. Admin provisioning (backend-only helper) & moderation
+  const adminEmail = `admin_${rand}@test.com`;
+  const adminPassword = `AdminTestPass_${rand}!9`;
+  await provisionAdminAccount(db, {
+    fullName: "Test Integration Admin",
+    email: adminEmail,
+    password: adminPassword,
+  });
+
   const adminLogin = await dispatch("POST", "/api/auth/login", {
-    email: env.ADMIN_SEED_EMAIL,
-    password: env.ADMIN_SEED_PASSWORD,
+    email: adminEmail,
+    password: adminPassword,
   });
   assert(
     adminLogin.statusCode === 200 && adminLogin.body.user?.role === "admin",
@@ -480,6 +498,89 @@ async function runTests() {
       persistedMsgsRes.body.messages.length >= 2,
     "Messages persist in SQLite across database close and reopen (restart simulation)",
     persistedMsgsRes.body
+  );
+
+  // 12. Nexconn chat token & security integration checks
+  const unauthChatToken = await dispatch("GET", "/api/chat/token");
+  assert(
+    unauthChatToken.statusCode === 401,
+    "Unauthenticated GET /api/chat/token returns 401"
+  );
+
+  const otherUserTokenAttempt = await dispatch(
+    "GET",
+    `/api/chat/token?userId=${sellerId}`,
+    undefined,
+    { cookie: freshBuyerCookie }
+  );
+  assert(
+    otherUserTokenAttempt.statusCode === 403,
+    "Authenticated user cannot request a Nexconn token for another userId (403)"
+  );
+
+  const chatStatusRes = await dispatch("GET", "/api/chat/status", undefined, {
+    cookie: freshBuyerCookie,
+  });
+  assert(
+    chatStatusRes.statusCode === 200 &&
+      chatStatusRes.body.nexconnUserId === toNexconnUserId(buyerId),
+    "GET /api/chat/status returns stable Nexconn user ID mapped from authenticated user"
+  );
+
+  const tokenMissingConfigRes = await dispatch(
+    "GET",
+    "/api/chat/token",
+    undefined,
+    { cookie: freshBuyerCookie }
+  );
+  assert(
+    tokenMissingConfigRes.statusCode === 503 &&
+      tokenMissingConfigRes.body.code === "NEXCONN_NOT_CONFIGURED",
+    "GET /api/chat/token returns 503 cleanly when NEXCONN_APP_KEY/NEXCONN_APP_SECRET are not configured"
+  );
+
+  const convsWithNexconnId = await dispatch(
+    "GET",
+    "/api/messages/conversations",
+    undefined,
+    { cookie: freshBuyerCookie }
+  );
+  const matchingConv = Array.isArray(convsWithNexconnId.body.conversations)
+    ? convsWithNexconnId.body.conversations.find(
+        (c: { id: string; participantNexconnUserId?: string }) =>
+          c.id === convId
+      )
+    : undefined;
+  assert(
+    matchingConv?.participantNexconnUserId === toNexconnUserId(sellerId),
+    "Conversations expose mapped participantNexconnUserId for authorized counterparties"
+  );
+
+  const nexconnTransportMsg = await dispatch(
+    "POST",
+    `/api/messages/${convId}`,
+    {
+      content: "Confirming delivery via Nexconn transport.",
+      deliveryTransport: "nexconn",
+    },
+    { cookie: freshBuyerCookie }
+  );
+  assert(
+    nexconnTransportMsg.statusCode === 201 &&
+      Boolean(nexconnTransportMsg.body.data?.id),
+    "POST /api/messages/:id persists audit record when deliveryTransport=nexconn"
+  );
+
+  const attachRefRes = await dispatch(
+    "PATCH",
+    `/api/messages/${nexconnTransportMsg.body.data.id}/nexconn`,
+    { nexconnMessageId: "nc-test-msg-001" },
+    { cookie: freshBuyerCookie }
+  );
+  assert(
+    attachRefRes.statusCode === 200 &&
+      attachRefRes.body.nexconnMessageId === "nc-test-msg-001",
+    "Sender can attach Nexconn messageId reference to persisted TrustBridge message"
   );
 
   console.log(`\n========================================`);

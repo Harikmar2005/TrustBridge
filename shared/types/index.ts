@@ -81,6 +81,7 @@ export interface ConversationSummary {
   createdAt: string;
   updatedAt: string;
   participantId: string;
+  participantNexconnUserId?: string;
   participantName: string;
   participantRole: UserRole;
   participantBusinessName?: string | null;
@@ -97,6 +98,7 @@ export interface ChatMessage {
   content: string;
   originalLanguage?: string | null;
   riskLevel?: SecuritySeverity | 'NONE';
+  nexconnMessageId?: string | null;
   isDeleted: boolean;
   deletedAt?: string | null;
   readByOther?: boolean;

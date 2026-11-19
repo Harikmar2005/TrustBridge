@@ -24,11 +24,24 @@ const envSchema = z.object({
     .default('trustbridge-dev-secret-key-change-in-production-32chars'),
   JWT_EXPIRES_IN: z.string().default('7d'),
   DATABASE_PATH: z.string().default('./database/trustbridge.db'),
-  ADMIN_SEED_EMAIL: z.string().email().default('admin@trustbridge.local'),
-  ADMIN_SEED_PASSWORD: z.string().min(12).default('TrustBridgeAdmin!2026'),
+  ENABLE_DEMO_SEED: z
+    .string()
+    .optional()
+    .default('false')
+    .transform((val) => val.trim().toLowerCase() === 'true'),
+  DEMO_ADMIN_EMAIL: z.string().optional().default(''),
+  DEMO_ADMIN_PASSWORD: z.string().optional().default(''),
+  DEMO_BUYER_EMAIL: z.string().optional().default(''),
+  DEMO_BUYER_PASSWORD: z.string().optional().default(''),
+  DEMO_SELLER_EMAIL: z.string().optional().default(''),
+  DEMO_SELLER_PASSWORD: z.string().optional().default(''),
   TRANSLATION_PROVIDER: z.enum(['none', 'libretranslate']).default('none'),
   TRANSLATION_API_URL: z.string().optional().default(''),
   TRANSLATION_API_KEY: z.string().optional().default(''),
+  NEXCONN_APP_KEY: z.string().optional().default(''),
+  NEXCONN_APP_SECRET: z.string().optional().default(''),
+  NEXCONN_AREA_CODE: z.enum(['SG', 'NA', 'SA', 'BJ', 'OM']).default('SG'),
+  NEXCONN_API_BASE_URL: z.string().optional().default(''),
 });
 
 const parsedEnv = envSchema.safeParse({

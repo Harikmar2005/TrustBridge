@@ -43,7 +43,6 @@ export default function Login() {
   const {
     register,
     handleSubmit,
-    setValue,
     formState: { errors, isSubmitting },
   } = useForm<LoginFormValues>({
     resolver: zodResolver(loginSchema),
@@ -71,12 +70,6 @@ export default function Login() {
         err instanceof Error ? err.message : "Unable to sign in right now."
       );
     }
-  }
-
-  function fillDemoCredentials(email: string, password: string) {
-    setValue("email", email, { shouldValidate: true });
-    setValue("password", password, { shouldValidate: true });
-    setServerError("");
   }
 
   async function handleRequestReset() {
@@ -253,54 +246,6 @@ export default function Login() {
               )}
             </button>
           </form>
-
-          {/* Local development seeded accounts helper */}
-          <div className="mt-6 rounded-xl border border-slate-200 bg-[#F5F8FB] p-4">
-            <p className="text-xs font-semibold text-[#172B3A]">
-              Seeded local evaluation accounts
-            </p>
-            <p className="mt-1 text-xs text-[#64748B]">
-              Populate credentials for real server-side authentication:
-            </p>
-            <div className="mt-3 flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() =>
-                  fillDemoCredentials(
-                    "buyer@trustbridge.local",
-                    "TrustBridgeBuyer!2026"
-                  )
-                }
-                className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-[#172B3A] hover:bg-slate-50"
-              >
-                Fill Buyer
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  fillDemoCredentials(
-                    "elena@vanceaudio.local",
-                    "TrustBridgeSeller!2026"
-                  )
-                }
-                className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-[#172B3A] hover:bg-slate-50"
-              >
-                Fill Seller
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  fillDemoCredentials(
-                    "admin@trustbridge.local",
-                    "TrustBridgeAdmin!2026"
-                  )
-                }
-                className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-[#172B3A] hover:bg-slate-50"
-              >
-                Fill Admin
-              </button>
-            </div>
-          </div>
 
           {/* Development Password Reset Workflow */}
           {resetOpen && (

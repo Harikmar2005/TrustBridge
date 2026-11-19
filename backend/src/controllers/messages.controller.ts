@@ -2,6 +2,7 @@ import crypto from "crypto";
 import { Response } from "express";
 import { db } from "../config/database";
 import { analyzeMessageForFraud } from "../services/fraud.rules";
+import { toNexconnUserId } from "../services/nexconn.service";
 import { createNotification } from "../services/notification.service";
 import { createSecurityEventAndAlert } from "../services/security.service";
 import { getTranslationProvider } from "../services/translation.service";
@@ -95,7 +96,14 @@ export function getConversations(
       user.id,
       user.id,
       user.id
-    );
+    )
+    .map((conv) => ({
+      ...conv,
+      participantNexconnUserId:
+        typeof conv.participantId === "string" && conv.participantId
+          ? toNexconnUserId(conv.participantId)
+          : undefined,
+    }));
 
   res.status(200).json({
     success: true,
@@ -264,6 +272,7 @@ export function getMessages(req: AuthenticatedRequest, res: Response): void {
         content: string;
         originalLanguage: string | null;
         riskLevel: string;
+        nexconnMessageId: string | null;
         isDeleted: number;
         deletedAt: string | null;
         createdAt: string;
@@ -278,6 +287,7 @@ export function getMessages(req: AuthenticatedRequest, res: Response): void {
          CASE WHEN m.isDeleted = 1 THEN '[Message removed by sender]' ELSE m.content END AS content,
          m.originalLanguage,
          m.riskLevel,
+         m.nexconnMessageId,
          m.isDeleted,
          m.deletedAt,
          m.createdAt,
@@ -376,14 +386,30 @@ export function sendMessage(req: AuthenticatedRequest, res: Response): void {
     burstThreshold: Number.parseInt(burstPolicy?.value ?? "6", 10) || 6,
   });
 
+  const deliveryTransport =
+    req.body?.deliveryTransport === "nexconn" ? "nexconn" : "socket";
+  const nexconnMessageId =
+    typeof req.body?.nexconnMessageId === "string" &&
+    req.body.nexconnMessageId.trim().length > 0
+      ? req.body.nexconnMessageId.trim().slice(0, 128)
+      : null;
+
   const id = crypto.randomUUID();
   const createdAt = new Date().toISOString();
 
   db.transaction(() => {
-    db.prepare<[string, string, string, string, string, string]>(
-      `INSERT INTO messages (id, conversationId, senderId, content, riskLevel, isDeleted, createdAt)
-       VALUES (?, ?, ?, ?, ?, 0, ?)`
-    ).run(id, conversationId, user.id, content, analysis.riskLevel, createdAt);
+    db.prepare<[string, string, string, string, string, string | null, string]>(
+      `INSERT INTO messages (id, conversationId, senderId, content, riskLevel, nexconnMessageId, isDeleted, createdAt)
+       VALUES (?, ?, ?, ?, ?, ?, 0, ?)`
+    ).run(
+      id,
+      conversationId,
+      user.id,
+      content,
+      analysis.riskLevel,
+      nexconnMessageId,
+      createdAt
+    );
 
     db.prepare<[string, string, string]>(
       `UPDATE conversations
@@ -433,12 +459,15 @@ export function sendMessage(req: AuthenticatedRequest, res: Response): void {
     senderName: user.fullName,
     content,
     riskLevel: analysis.riskLevel,
+    nexconnMessageId,
     isDeleted: false,
     readByOther: false,
     createdAt,
   };
 
-  emitToConversation(conversationId, "message:new", payload);
+  if (deliveryTransport !== "nexconn") {
+    emitToConversation(conversationId, "message:new", payload);
+  }
   emitToUser(recipientId, "notification:new", {
     conversationId,
     senderName: user.fullName,
@@ -450,6 +479,60 @@ export function sendMessage(req: AuthenticatedRequest, res: Response): void {
     message: "Message sent successfully.",
     data: payload,
     safetyNotice: analysis.flagged ? analysis.description : undefined,
+  });
+}
+
+// PATCH /api/messages/:messageId/nexconn
+export function attachNexconnMessageId(
+  req: AuthenticatedRequest,
+  res: Response
+): void {
+  const user = req.user;
+  const messageId = String(req.params.messageId);
+  const nexconnMessageId =
+    typeof req.body?.nexconnMessageId === "string"
+      ? req.body.nexconnMessageId.trim().slice(0, 128)
+      : "";
+
+  if (!user) {
+    res.status(401).json({ success: false, message: "Authentication required." });
+    return;
+  }
+
+  if (!nexconnMessageId) {
+    res.status(400).json({
+      success: false,
+      message: "A valid nexconnMessageId is required.",
+    });
+    return;
+  }
+
+  const row = db
+    .prepare<[string], { id: string; senderId: string }>(
+      "SELECT id, senderId FROM messages WHERE id = ?"
+    )
+    .get(messageId);
+
+  if (!row) {
+    res.status(404).json({ success: false, message: "Message not found." });
+    return;
+  }
+
+  if (row.senderId !== user.id) {
+    res.status(403).json({
+      success: false,
+      message: "Only the message sender can attach a Nexconn delivery reference.",
+    });
+    return;
+  }
+
+  db.prepare<[string, string]>(
+    "UPDATE messages SET nexconnMessageId = ? WHERE id = ?"
+  ).run(nexconnMessageId, messageId);
+
+  res.status(200).json({
+    success: true,
+    nexconnMessageId,
   });
 }
 
@@ -501,11 +584,16 @@ export function markConversationRead(
     }
   });
 
-  emitToConversation(conversationId, "conversation:read", {
-    conversationId,
-    readerId: user.id,
-    readAt: now,
-  });
+  const deliveryTransport =
+    req.body?.deliveryTransport === "nexconn" ? "nexconn" : "socket";
+
+  if (deliveryTransport !== "nexconn") {
+    emitToConversation(conversationId, "conversation:read", {
+      conversationId,
+      readerId: user.id,
+      readAt: now,
+    });
+  }
 
   res.status(200).json({
     success: true,
@@ -554,11 +642,19 @@ export function deleteMessage(req: AuthenticatedRequest, res: Response): void {
     "UPDATE messages SET isDeleted = 1, deletedAt = ? WHERE id = ?"
   ).run(now, messageId);
 
-  emitToConversation(message.conversationId, "message:deleted", {
-    messageId,
-    conversationId: message.conversationId,
-    deletedAt: now,
-  });
+  const deliveryTransport =
+    req.body?.deliveryTransport === "nexconn" ||
+    req.query?.deliveryTransport === "nexconn"
+      ? "nexconn"
+      : "socket";
+
+  if (deliveryTransport !== "nexconn") {
+    emitToConversation(message.conversationId, "message:deleted", {
+      messageId,
+      conversationId: message.conversationId,
+      deletedAt: now,
+    });
+  }
 
   res.status(200).json({
     success: true,

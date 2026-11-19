@@ -34,11 +34,24 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
 
 interface ApiResponse<T = unknown> {
   success: boolean;
+  code?: string;
   message?: string;
   user?: AuthUser;
   data?: T;
   errors?: { field: string; message: string }[];
   [key: string]: unknown;
+}
+
+export class ApiHttpError extends Error {
+  public readonly status: number;
+  public readonly code?: string;
+
+  constructor(message: string, status: number, code?: string) {
+    super(message);
+    this.name = "ApiHttpError";
+    this.status = status;
+    this.code = code;
+  }
 }
 
 async function apiRequest<T = unknown>(
@@ -60,7 +73,10 @@ async function apiRequest<T = unknown>(
   try {
     data = (await response.json()) as ApiResponse<T> & Record<string, unknown>;
   } catch {
-    throw new Error("The server returned an invalid response.");
+    throw new ApiHttpError(
+      "The server returned an invalid response.",
+      response.status
+    );
   }
 
   if (!response.ok) {
@@ -74,10 +90,12 @@ async function apiRequest<T = unknown>(
         window.dispatchEvent(new CustomEvent("tb:unauthorized"));
       }
     }
-    throw new Error(
+    throw new ApiHttpError(
       typeof data.message === "string"
         ? data.message
-        : `Request failed (${response.status})`
+        : `Request failed (${response.status})`,
+      response.status,
+      typeof data.code === "string" ? data.code : undefined
     );
   }
 
@@ -224,7 +242,22 @@ export function requestAccountDeletion() {
   return apiRequest("/users/delete-request", { method: "POST" });
 }
 
-// Messaging & Translation
+// Messaging & Nexconn Chat Token & Translation
+export async function getNexconnChatToken(): Promise<{
+  token: string;
+  nexconnUserId: string;
+  appKey: string;
+  areaCode: "SG" | "NA" | "SA" | "BJ" | "OM";
+}> {
+  const res = await apiRequest("/chat/token");
+  return {
+    token: String(res.token || ""),
+    nexconnUserId: String(res.nexconnUserId || ""),
+    appKey: String(res.appKey || ""),
+    areaCode: (res.areaCode as "SG" | "NA" | "SA" | "BJ" | "OM") || "SG",
+  };
+}
+
 export function getConversations() {
   return apiRequest("/messages/conversations");
 }
@@ -242,20 +275,56 @@ export function getConversationMessages(conversationId: string) {
 
 export function sendConversationMessage(
   conversationId: string,
-  content: string
+  content: string,
+  options?: {
+    deliveryTransport?: "nexconn" | "socket";
+    nexconnMessageId?: string;
+  }
 ) {
   return apiRequest(`/messages/${conversationId}`, {
     method: "POST",
-    body: JSON.stringify({ content }),
+    body: JSON.stringify({
+      content,
+      ...(options?.deliveryTransport
+        ? { deliveryTransport: options.deliveryTransport }
+        : {}),
+      ...(options?.nexconnMessageId
+        ? { nexconnMessageId: options.nexconnMessageId }
+        : {}),
+    }),
   });
 }
 
-export function markConversationRead(conversationId: string) {
-  return apiRequest(`/messages/${conversationId}/read`, { method: "PATCH" });
+export function attachMessageNexconnId(
+  messageId: string,
+  nexconnMessageId: string
+) {
+  return apiRequest(`/messages/${messageId}/nexconn`, {
+    method: "PATCH",
+    body: JSON.stringify({ nexconnMessageId }),
+  });
 }
 
-export function deleteMessage(messageId: string) {
-  return apiRequest(`/messages/${messageId}`, { method: "DELETE" });
+export function markConversationRead(
+  conversationId: string,
+  deliveryTransport?: "nexconn" | "socket"
+) {
+  return apiRequest(`/messages/${conversationId}/read`, {
+    method: "PATCH",
+    ...(deliveryTransport
+      ? { body: JSON.stringify({ deliveryTransport }) }
+      : {}),
+  });
+}
+
+export function deleteMessage(
+  messageId: string,
+  deliveryTransport?: "nexconn" | "socket"
+) {
+  const qs = deliveryTransport
+    ? `?deliveryTransport=${encodeURIComponent(deliveryTransport)}`
+    : "";
+  return apiRequest(`/messages/${messageId}${qs}`, { method: "DELETE" });
 }
 
 export function translateMessage(messageId: string, targetLanguage: string) {

@@ -10,6 +10,7 @@ import { errorHandler } from "./middleware/errorHandler";
 
 import adminRoutes from "./routes/admin.routes";
 import authRoutes from "./routes/auth.routes";
+import chatRoutes from "./routes/chat.routes";
 import disputesRoutes from "./routes/disputes.routes";
 import messagesRoutes from "./routes/messages.routes";
 import notificationsRoutes from "./routes/notifications.routes";
@@ -89,6 +90,7 @@ app.get("/api/health", (_req, res) => {
 
 // Domain routes
 app.use("/api/auth", authRoutes);
+app.use("/api/chat", chatRoutes);
 app.use("/api/users", usersRoutes);
 app.use("/api/messages", messagesRoutes);
 app.use("/api/trust", trustRoutes);

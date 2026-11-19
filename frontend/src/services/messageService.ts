@@ -1,4 +1,5 @@
 import {
+  attachMessageNexconnId,
   createConversation,
   deleteMessage,
   getConversationMessages,
@@ -45,9 +46,13 @@ export async function fetchConversationMessages(
 
 export async function postMessage(
   conversationId: string,
-  content: string
+  content: string,
+  options?: {
+    deliveryTransport?: "nexconn" | "socket";
+    nexconnMessageId?: string;
+  }
 ): Promise<{ message: ChatMessage | undefined; safetyNotice?: string }> {
-  const res = await sendConversationMessage(conversationId, content);
+  const res = await sendConversationMessage(conversationId, content, options);
   return {
     message: res.data as ChatMessage | undefined,
     safetyNotice:
@@ -55,12 +60,25 @@ export async function postMessage(
   };
 }
 
-export async function markThreadRead(conversationId: string): Promise<void> {
-  await markConversationRead(conversationId);
+export async function saveMessageNexconnRef(
+  messageId: string,
+  nexconnMessageId: string
+): Promise<void> {
+  await attachMessageNexconnId(messageId, nexconnMessageId);
 }
 
-export async function removeMessage(messageId: string): Promise<void> {
-  await deleteMessage(messageId);
+export async function markThreadRead(
+  conversationId: string,
+  deliveryTransport?: "nexconn" | "socket"
+): Promise<void> {
+  await markConversationRead(conversationId, deliveryTransport);
+}
+
+export async function removeMessage(
+  messageId: string,
+  deliveryTransport?: "nexconn" | "socket"
+): Promise<void> {
+  await deleteMessage(messageId, deliveryTransport);
 }
 
 export async function translateChatMessage(

@@ -53,14 +53,19 @@ npm run lint
 npm run build
 ```
 
-## Seeded Local Evaluation Accounts
+## Local Account Setup & Development Seeding
 
-On first startup into an empty non-admin database, TrustBridge seeds sample accounts for evaluation:
-- **Admin**: `admin@trustbridge.local` / `TrustBridgeAdmin!2026`
-- **Buyer**: `buyer@trustbridge.local` / `TrustBridgeBuyer!2026`
-- **Seller 1**: `elena@vanceaudio.local` / `TrustBridgeSeller!2026`
-- **Seller 2**: `marcus@harborline.local` / `TrustBridgeSeller!2026`
-- **Seller 3**: `priya@meridiantextiles.local` / `TrustBridgeSeller!2026`
+TrustBridge **does not** create default users or administrator accounts on startup. Choose one of the following methods for local setup:
+
+1. **Standard User Registration**: Create Buyer or Seller accounts through `/register` or `POST /api/auth/register`. Public registration strictly blocks administrator role creation.
+2. **Backend-Only Administrator Provisioning**: Provision an administrator securely from the backend CLI using environment variables (never exposed to the frontend):
+   ```powershell
+   $env:ADMIN_EMAIL="security-admin@yourdomain.local"
+   $env:ADMIN_PASSWORD="your-strong-12plus-char-passphrase"
+   npm run provision:admin
+   ```
+3. **Optional Development-Only Demo Seeding** (disabled by default; strictly forbidden when `NODE_ENV=production`):
+   Set `NODE_ENV=development`, `ENABLE_DEMO_SEED=true`, and provide your own `DEMO_ADMIN_EMAIL`, `DEMO_ADMIN_PASSWORD`, `DEMO_BUYER_EMAIL`, `DEMO_BUYER_PASSWORD`, `DEMO_SELLER_EMAIL`, and `DEMO_SELLER_PASSWORD` values in your untracked `.env` file before starting the backend. Existing accounts are never overwritten.
 
 ## Environment & Honest Limitations
 - **Password Reset**: In local development (`NODE_ENV !== "production"`), `/api/auth/forgot-password` generates a hashed single-use token and returns a development reset token directly because no external SMTP service is attached.

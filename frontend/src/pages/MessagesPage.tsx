@@ -5,6 +5,8 @@ import ChatWindow from "../components/messaging/ChatWindow";
 import ConversationList from "../components/messaging/ConversationList";
 import NewConversationModal from "../components/messaging/NewConversationModal";
 import { useAuth } from "../contexts/AuthContext";
+import { useNexconn } from "../contexts/NexconnContext";
+import { ChannelType, MessageType } from "../services/nexconnService";
 import {
   fetchConversationMessages,
   fetchConversations,
@@ -12,8 +14,15 @@ import {
   postMessage,
   removeMessage,
   reportConversationCounterparty,
+  saveMessageNexconnRef,
   translateChatMessage,
 } from "../services/messageService";
+import {
+  findAuthorizedConversationForNexconnChannel,
+  mergeChatMessage,
+  parseNexconnExtra,
+  reconcileConversationMessages,
+} from "../utils/nexconnMessages";
 import type {
   ChatMessage,
   ConversationSummary,
@@ -33,6 +42,19 @@ export default function MessagesPage() {
   const { id: routeConvId } = useParams<{ id?: string }>();
   const navigate = useNavigate();
   const { user, socket, socketConnected } = useAuth();
+  const {
+    status: nexconnStatus,
+    connected: nexconnConnected,
+    nexconnUserId: currentNexconnUserId,
+    error: nexconnError,
+    sendDirectText,
+    sendReadReceipt,
+    deleteMessageForAll,
+    subscribeMessages,
+    subscribeDeletes,
+    subscribeReadReceipts,
+    subscribeOfflineSync,
+  } = useNexconn();
 
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [selectedId, setSelectedId] = useState<string>(routeConvId || "");
@@ -67,6 +89,11 @@ export default function MessagesPage() {
   const sendingRef = useRef(false);
   const initialSelectionDoneRef = useRef(false);
   const prevRouteConvIdRef = useRef<string | undefined>(routeConvId);
+  const conversationsRef = useRef<ConversationSummary[]>([]);
+
+  useEffect(() => {
+    conversationsRef.current = conversations;
+  }, [conversations]);
 
   useEffect(() => {
     const prevRoute = prevRouteConvIdRef.current;
@@ -149,13 +176,38 @@ export default function MessagesPage() {
       try {
         const msgs = await fetchConversationMessages(selectedId);
         if (!active) return;
-        setMessages(msgs);
+        setMessages((prev) =>
+          reconcileConversationMessages(msgs, prev, selectedId)
+        );
         setLoadedConvId(selectedId);
         setError("");
-        await markThreadRead(selectedId);
+        await markThreadRead(
+          selectedId,
+          nexconnConnected ? "nexconn" : "socket"
+        );
         const list = await fetchConversations();
         if (active) {
           setConversations(list);
+          if (nexconnConnected) {
+            const conv = list.find((c) => c.id === selectedId);
+            const unreadIncomingNexconnIds = msgs
+              .filter(
+                (m) =>
+                  m.senderId !== user?.id &&
+                  !m.isDeleted &&
+                  Boolean(m.nexconnMessageId)
+              )
+              .map((m) => m.nexconnMessageId as string);
+            if (
+              conv?.participantNexconnUserId &&
+              unreadIncomingNexconnIds.length > 0
+            ) {
+              void sendReadReceipt(
+                conv.participantNexconnUserId,
+                unreadIncomingNexconnIds
+              );
+            }
+          }
         }
       } catch (err) {
         if (active) {
@@ -170,11 +222,189 @@ export default function MessagesPage() {
     return () => {
       active = false;
     };
-  }, [selectedId]);
+  }, [selectedId, nexconnConnected, sendReadReceipt, user?.id]);
 
-  // Socket.IO real-time updates across active and sidebar conversations
+  // Nexconn real-time messaging listeners (authoritative when Nexconn is connected)
   useEffect(() => {
-    if (!socket) return;
+    const unsubMsg = subscribeMessages((incomingNexconnMsgs) => {
+      void (async () => {
+        for (const msg of incomingNexconnMsgs) {
+          if (msg.channelIdentifier.channelType !== ChannelType.DIRECT) {
+            continue;
+          }
+          if (msg.messageType !== MessageType.TEXT) {
+            continue;
+          }
+
+          const counterpartyNexconnId = msg.channelIdentifier.channelId;
+          let authorizedConv = findAuthorizedConversationForNexconnChannel(
+            conversationsRef.current,
+            counterpartyNexconnId
+          );
+
+          // If not in cached list yet, re-verify against TrustBridge backend authorization
+          if (!authorizedConv) {
+            try {
+              const latestConvs = await fetchConversations();
+              conversationsRef.current = latestConvs;
+              setConversations(latestConvs);
+              authorizedConv = findAuthorizedConversationForNexconnChannel(
+                latestConvs,
+                counterpartyNexconnId
+              );
+            } catch {
+              authorizedConv = null;
+            }
+          }
+
+          // Block arbitrary/unauthorized Nexconn channels from bypassing TrustBridge membership
+          if (!authorizedConv) {
+            continue;
+          }
+
+          const contentObj = msg.content as { text?: unknown; extra?: unknown };
+          const text =
+            typeof contentObj?.text === "string" ? contentObj.text : "";
+          if (!text) continue;
+
+          const extraMeta = parseNexconnExtra(
+            typeof contentObj?.extra === "string" ? contentObj.extra : undefined
+          );
+          const isFromMe =
+            Boolean(currentNexconnUserId) &&
+            msg.senderUserId === currentNexconnUserId;
+          const senderId = isFromMe
+            ? user?.id || ""
+            : authorizedConv.participantId;
+
+          const mapped: ChatMessage = {
+            id: extraMeta.trustBridgeMessageId || msg.messageId,
+            conversationId: authorizedConv.id,
+            senderId,
+            senderName: isFromMe
+              ? user?.fullName || "You"
+              : authorizedConv.participantName,
+            content: text,
+            riskLevel: extraMeta.riskLevel ?? "NONE",
+            nexconnMessageId: msg.messageId,
+            isDeleted: false,
+            readByOther: false,
+            createdAt: new Date(msg.sentTime || Date.now()).toISOString(),
+          };
+
+          if (authorizedConv.id === selectedId) {
+            setMessages((prev) => mergeChatMessage(prev, mapped));
+
+            if (!isFromMe) {
+              void markThreadRead(authorizedConv.id, "nexconn");
+              if (authorizedConv.participantNexconnUserId) {
+                void sendReadReceipt(authorizedConv.participantNexconnUserId, [
+                  msg.messageId,
+                ]);
+              }
+              // Sync server-evaluated fraud riskLevel into state without duplicates
+              void fetchConversationMessages(authorizedConv.id)
+                .then((serverMsgs) => {
+                  setMessages((prev) =>
+                    reconcileConversationMessages(
+                      serverMsgs,
+                      prev,
+                      authorizedConv!.id
+                    )
+                  );
+                })
+                .catch(() => {});
+            }
+          }
+
+          void refreshConversations();
+        }
+      })();
+    });
+
+    const unsubDelete = subscribeDeletes((deletedItems) => {
+      if (deletedItems.length === 0) return;
+      const deletedIds = new Set(deletedItems.map((d) => d.messageId));
+      setMessages((prev) =>
+        prev.map((m) =>
+          deletedIds.has(m.id) ||
+          (m.nexconnMessageId && deletedIds.has(m.nexconnMessageId))
+            ? {
+                ...m,
+                isDeleted: true,
+                content: "[Message removed by sender]",
+              }
+            : m
+        )
+      );
+      void refreshConversations();
+    });
+
+    const unsubReceipt = subscribeReadReceipts((responses) => {
+      if (!selectedId || responses.length === 0) return;
+      const activeConv = conversationsRef.current.find(
+        (c) => c.id === selectedId
+      );
+      if (!activeConv?.participantNexconnUserId) return;
+
+      const matchingIds = new Set(
+        responses
+          .filter(
+            (r) =>
+              r.channelIdentifier.channelType === ChannelType.DIRECT &&
+              r.channelIdentifier.channelId ===
+                activeConv.participantNexconnUserId
+          )
+          .map((r) => r.messageId)
+      );
+      if (matchingIds.size === 0) return;
+
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.senderId === user?.id &&
+          (matchingIds.has(m.id) ||
+            (m.nexconnMessageId && matchingIds.has(m.nexconnMessageId)))
+            ? { ...m, readByOther: true }
+            : m
+        )
+      );
+    });
+
+    const unsubSync = subscribeOfflineSync(() => {
+      void refreshConversations();
+      if (selectedId) {
+        void fetchConversationMessages(selectedId)
+          .then((serverMsgs) => {
+            setMessages((prev) =>
+              reconcileConversationMessages(serverMsgs, prev, selectedId)
+            );
+          })
+          .catch(() => {});
+      }
+    });
+
+    return () => {
+      unsubMsg();
+      unsubDelete();
+      unsubReceipt();
+      unsubSync();
+    };
+  }, [
+    selectedId,
+    user?.id,
+    user?.fullName,
+    currentNexconnUserId,
+    refreshConversations,
+    sendReadReceipt,
+    subscribeMessages,
+    subscribeDeletes,
+    subscribeReadReceipts,
+    subscribeOfflineSync,
+  ]);
+
+  // Legacy Socket.IO chat delivery fallback ONLY when Nexconn is not connected (prevents duplicate delivery)
+  useEffect(() => {
+    if (!socket || nexconnConnected) return;
 
     const joinActive = () => {
       if (selectedId) {
@@ -189,12 +419,9 @@ export default function MessagesPage() {
         void refreshConversations();
         return;
       }
-      setMessages((prev) => {
-        if (prev.some((m) => m.id === incoming.id)) return prev;
-        return [...prev, incoming];
-      });
+      setMessages((prev) => mergeChatMessage(prev, incoming));
       if (incoming.senderId !== user?.id) {
-        void markThreadRead(selectedId);
+        void markThreadRead(selectedId, "socket");
       }
       void refreshConversations();
     };
@@ -240,11 +467,11 @@ export default function MessagesPage() {
       socket.off("conversation:read", onRead);
       socket.off("message:deleted", onDeleted);
     };
-  }, [socket, selectedId, user?.id, refreshConversations]);
+  }, [socket, nexconnConnected, selectedId, user?.id, refreshConversations]);
 
-  // Polling fallback when Socket.IO is disconnected
+  // Polling fallback only when neither Nexconn nor Socket.IO is connected
   useEffect(() => {
-    if (socketConnected) return;
+    if (nexconnConnected || socketConnected) return;
     const timer = window.setInterval(() => {
       if (document.visibilityState !== "visible") return;
       void refreshConversations();
@@ -257,7 +484,7 @@ export default function MessagesPage() {
       }
     }, 5000);
     return () => window.clearInterval(timer);
-  }, [socketConnected, selectedId, refreshConversations]);
+  }, [nexconnConnected, socketConnected, selectedId, refreshConversations]);
 
   const activeConversation = useMemo(
     () => conversations.find((c) => c.id === selectedId) || null,
@@ -296,16 +523,54 @@ export default function MessagesPage() {
     setError("");
     setSafetyNotice("");
     try {
-      const result = await postMessage(selectedId, trimmed);
+      const useNexconnDelivery =
+        nexconnConnected && Boolean(activeConversation?.participantNexconnUserId);
+
+      // 1. TrustBridge validates membership, screens for fraud, scores trust, and persists audit record
+      const result = await postMessage(selectedId, trimmed, {
+        deliveryTransport: useNexconnDelivery ? "nexconn" : "socket",
+      });
       setComposerText("");
       if (result.safetyNotice) {
         setSafetyNotice(result.safetyNotice);
       }
-      if (result.message) {
-        const created = result.message;
-        setMessages((prev) =>
-          prev.some((m) => m.id === created.id) ? prev : [...prev, created]
-        );
+
+      let created = result.message;
+
+      // 2. Deliver message in real time via Nexconn DirectChannel when connected
+      if (
+        useNexconnDelivery &&
+        activeConversation?.participantNexconnUserId &&
+        created
+      ) {
+        const nexconnSend = await sendDirectText({
+          targetNexconnUserId: activeConversation.participantNexconnUserId,
+          text: trimmed,
+          metadata: {
+            trustBridgeMessageId: created.id,
+            trustBridgeConversationId: selectedId,
+            riskLevel: created.riskLevel,
+          },
+        });
+
+        if (nexconnSend.isOk && nexconnSend.messageId) {
+          created = {
+            ...created,
+            nexconnMessageId: nexconnSend.messageId,
+          };
+          void saveMessageNexconnRef(created.id, nexconnSend.messageId).catch(
+            () => {}
+          );
+        } else if (!nexconnSend.isOk) {
+          setError(
+            `Message saved to TrustBridge audit log, but real-time Nexconn delivery failed (code ${nexconnSend.code}).`
+          );
+        }
+      }
+
+      if (created) {
+        const finalMsg = created;
+        setMessages((prev) => mergeChatMessage(prev, finalMsg));
       }
       await refreshConversations();
     } catch (err) {
@@ -318,7 +583,23 @@ export default function MessagesPage() {
 
   async function handleDelete(messageId: string) {
     try {
-      await removeMessage(messageId);
+      const targetMsg = messages.find((m) => m.id === messageId);
+      const useNexconnDelivery =
+        nexconnConnected && Boolean(activeConversation?.participantNexconnUserId);
+      await removeMessage(
+        messageId,
+        useNexconnDelivery ? "nexconn" : "socket"
+      );
+      if (
+        useNexconnDelivery &&
+        activeConversation?.participantNexconnUserId &&
+        targetMsg?.nexconnMessageId
+      ) {
+        void deleteMessageForAll(
+          activeConversation.participantNexconnUserId,
+          targetMsg.nexconnMessageId
+        );
+      }
       setMessages((prev) =>
         prev.map((m) =>
           m.id === messageId
@@ -453,7 +734,10 @@ export default function MessagesPage() {
           messages={messages}
           currentUserId={user?.id}
           loading={loadingMessages}
-          error={error}
+          error={
+            error ||
+            (nexconnStatus === "error" && nexconnError ? nexconnError : "")
+          }
           safetyNotice={safetyNotice}
           composerText={composerText}
           sending={sending}
