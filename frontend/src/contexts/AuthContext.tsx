@@ -9,9 +9,7 @@ import {
 import { io, type Socket } from "socket.io-client";
 import {
   getCurrentUser,
-  getStoredAuthToken,
   logoutUser,
-  setStoredAuthToken,
   type AuthUser,
 } from "../services/api";
 
@@ -19,6 +17,7 @@ interface AuthContextValue {
   user: AuthUser | null;
   loading: boolean;
   socket: Socket | null;
+  socketConnected: boolean;
   refreshUser: () => Promise<AuthUser | null>;
   setUser: (user: AuthUser | null) => void;
   logout: () => Promise<void>;
@@ -30,6 +29,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [socket, setSocket] = useState<Socket | null>(null);
+  const [socketConnected, setSocketConnected] = useState(false);
 
   const refreshUser = useCallback(async (): Promise<AuthUser | null> => {
     try {
@@ -67,7 +67,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     })();
 
     const handleUnauthorized = () => {
-      setStoredAuthToken(null);
       setUser(null);
     };
     window.addEventListener("tb:unauthorized", handleUnauthorized);
@@ -83,20 +82,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    const token = getStoredAuthToken();
     const client = io({
       withCredentials: true,
-      ...(token ? { auth: { token } } : {}),
       transports: ["websocket", "polling"],
     });
 
     client.on("connect", () => {
       setSocket(client);
+      setSocketConnected(true);
+    });
+
+    client.on("disconnect", () => {
+      setSocketConnected(false);
+    });
+
+    client.on("connect_error", () => {
+      setSocketConnected(false);
     });
 
     return () => {
       client.disconnect();
       setSocket(null);
+      setSocketConnected(false);
     };
   }, [user]);
 
@@ -104,7 +111,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       await logoutUser();
     } finally {
-      setStoredAuthToken(null);
       setUser(null);
     }
   }, []);
@@ -115,6 +121,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         user,
         loading,
         socket: user ? socket : null,
+        socketConnected: Boolean(user && socketConnected),
         refreshUser,
         setUser,
         logout,

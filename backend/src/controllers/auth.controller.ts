@@ -139,7 +139,6 @@ export async function register(
       success: true,
       message: "Account created successfully!",
       user: authUser,
-      token,
     });
   } catch (error) {
     console.error("Registration error:", error);
@@ -219,7 +218,6 @@ export async function login(
       success: true,
       message: "Signed in successfully!",
       user: authUser,
-      token,
     });
   } catch (error) {
     console.error("Login error:", error);

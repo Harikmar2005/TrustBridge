@@ -1,0 +1,87 @@
+import {
+  createConversation,
+  deleteMessage,
+  getConversationMessages,
+  getConversations,
+  listSellers,
+  markConversationRead,
+  reportAccount,
+  sendConversationMessage,
+  translateMessage,
+} from "./api";
+import type {
+  ChatMessage,
+  ConversationSummary,
+  SellerProfile,
+  TranslationOutput,
+} from "../types/message";
+
+export async function fetchConversations(): Promise<ConversationSummary[]> {
+  const res = await getConversations();
+  return (res.conversations as ConversationSummary[]) || [];
+}
+
+export async function createOrGetConversation(
+  recipientId: string
+): Promise<{ conversationId: string; message?: string }> {
+  const res = await createConversation(recipientId);
+  const conversationId =
+    typeof res.conversationId === "string" ? res.conversationId : "";
+  if (!conversationId) {
+    throw new Error("Server did not return a conversation ID.");
+  }
+  return {
+    conversationId,
+    message: typeof res.message === "string" ? res.message : undefined,
+  };
+}
+
+export async function fetchConversationMessages(
+  conversationId: string
+): Promise<ChatMessage[]> {
+  const res = await getConversationMessages(conversationId);
+  return (res.messages as ChatMessage[]) || [];
+}
+
+export async function postMessage(
+  conversationId: string,
+  content: string
+): Promise<{ message: ChatMessage | undefined; safetyNotice?: string }> {
+  const res = await sendConversationMessage(conversationId, content);
+  return {
+    message: res.data as ChatMessage | undefined,
+    safetyNotice:
+      typeof res.safetyNotice === "string" ? res.safetyNotice : undefined,
+  };
+}
+
+export async function markThreadRead(conversationId: string): Promise<void> {
+  await markConversationRead(conversationId);
+}
+
+export async function removeMessage(messageId: string): Promise<void> {
+  await deleteMessage(messageId);
+}
+
+export async function translateChatMessage(
+  messageId: string,
+  targetLanguage: string
+): Promise<TranslationOutput | null> {
+  const res = await translateMessage(messageId, targetLanguage);
+  return (res.data as TranslationOutput | undefined) ?? null;
+}
+
+export async function reportConversationCounterparty(params: {
+  reportedUserId: string;
+  conversationId: string;
+  reason: string;
+  details: string;
+}): Promise<string> {
+  const res = await reportAccount(params);
+  return String(res.message || "Report submitted.");
+}
+
+export async function fetchAvailableSellers(): Promise<SellerProfile[]> {
+  const res = await listSellers();
+  return (res.sellers as SellerProfile[]) || [];
+}

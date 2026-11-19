@@ -196,32 +196,33 @@ async function runTests() {
     }
   );
   assert(
-    loginBuyer.statusCode === 200 && typeof loginBuyer.body.token === "string",
-    "Valid login returns 200 and session token"
+    loginBuyer.statusCode === 200 && loginBuyer.body.token === undefined,
+    "Valid login returns 200 without exposing JWT token in JSON body"
   );
   const setCookieHeader = String(loginBuyer.headers["set-cookie"] || "");
   assert(
-    setCookieHeader.includes("SameSite=None") &&
+    setCookieHeader.includes("HttpOnly") &&
+      setCookieHeader.includes("SameSite=None") &&
       setCookieHeader.includes("Secure") &&
       setCookieHeader.includes("Partitioned"),
-    "HTTPS/run.app login sets SameSite=None; Secure; Partitioned cookie",
+    "HTTPS/run.app login sets HttpOnly; SameSite=None; Secure; Partitioned cookie",
     setCookieHeader
   );
   const freshBuyerCookie = extractCookie(loginBuyer);
 
-  const bearerDashboardRes = await dispatch(
+  const cookieDashboardRes = await dispatch(
     "GET",
     "/api/users/dashboard",
     undefined,
     {
-      authorization: `Bearer ${loginBuyer.body.token}`,
+      cookie: freshBuyerCookie,
     }
   );
   assert(
-    bearerDashboardRes.statusCode === 200 &&
-      bearerDashboardRes.body.data?.metrics !== undefined,
-    "Dashboard loads via Bearer token when cookies are absent (iframe fallback)",
-    bearerDashboardRes.body
+    cookieDashboardRes.statusCode === 200 &&
+      cookieDashboardRes.body.data?.metrics !== undefined,
+    "Dashboard loads via HTTP-only session cookie",
+    cookieDashboardRes.body
   );
 
   // 4. Trust score: new account shows "Not enough data"

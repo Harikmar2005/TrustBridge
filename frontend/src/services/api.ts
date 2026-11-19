@@ -31,41 +31,11 @@ export type {
 };
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
-const AUTH_TOKEN_KEY = "trustbridge_auth_token";
-let memoryAuthToken: string | null = null;
-
-export function getStoredAuthToken(): string | null {
-  if (memoryAuthToken) return memoryAuthToken;
-  try {
-    const stored = window.localStorage.getItem(AUTH_TOKEN_KEY);
-    if (stored) {
-      memoryAuthToken = stored;
-      return stored;
-    }
-  } catch {
-    // Ignore storage access restrictions in sandboxed environments
-  }
-  return null;
-}
-
-export function setStoredAuthToken(token: string | null): void {
-  memoryAuthToken = token;
-  try {
-    if (token) {
-      window.localStorage.setItem(AUTH_TOKEN_KEY, token);
-    } else {
-      window.localStorage.removeItem(AUTH_TOKEN_KEY);
-    }
-  } catch {
-    // Ignore storage access restrictions
-  }
-}
 
 interface ApiResponse<T = unknown> {
   success: boolean;
   message?: string;
   user?: AuthUser;
-  token?: string;
   data?: T;
   errors?: { field: string; message: string }[];
   [key: string]: unknown;
@@ -78,11 +48,6 @@ async function apiRequest<T = unknown>(
   const headers = new Headers(options.headers);
   if (options.body && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
-  }
-
-  const token = getStoredAuthToken();
-  if (token && !headers.has("Authorization")) {
-    headers.set("Authorization", `Bearer ${token}`);
   }
 
   const response = await fetch(`${API_BASE_URL}${endpoint}`, {
@@ -102,9 +67,9 @@ async function apiRequest<T = unknown>(
     if (
       response.status === 401 &&
       !endpoint.startsWith("/auth/login") &&
-      !endpoint.startsWith("/auth/register")
+      !endpoint.startsWith("/auth/register") &&
+      !endpoint.startsWith("/auth/me")
     ) {
-      setStoredAuthToken(null);
       if (typeof window !== "undefined") {
         window.dispatchEvent(new CustomEvent("tb:unauthorized"));
       }
@@ -120,43 +85,31 @@ async function apiRequest<T = unknown>(
 }
 
 // Auth
-export async function registerUser(details: {
+export function registerUser(details: {
   fullName: string;
   email: string;
   password: string;
   role: "buyer" | "seller";
 }) {
-  const res = await apiRequest("/auth/register", {
+  return apiRequest("/auth/register", {
     method: "POST",
     body: JSON.stringify(details),
   });
-  if (typeof res.token === "string") {
-    setStoredAuthToken(res.token);
-  }
-  return res;
 }
 
-export async function loginUser(details: { email: string; password: string }) {
-  const res = await apiRequest("/auth/login", {
+export function loginUser(details: { email: string; password: string }) {
+  return apiRequest("/auth/login", {
     method: "POST",
     body: JSON.stringify(details),
   });
-  if (typeof res.token === "string") {
-    setStoredAuthToken(res.token);
-  }
-  return res;
 }
 
 export function getCurrentUser() {
   return apiRequest("/auth/me");
 }
 
-export async function logoutUser() {
-  try {
-    return await apiRequest("/auth/logout", { method: "POST" });
-  } finally {
-    setStoredAuthToken(null);
-  }
+export function logoutUser() {
+  return apiRequest("/auth/logout", { method: "POST" });
 }
 
 export function changePassword(details: {
