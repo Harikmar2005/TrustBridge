@@ -13,7 +13,11 @@ import type {
   MessageReadReceiptResponse,
 } from "@nexconn/chat";
 import { useAuth } from "./AuthContext";
-import { ApiHttpError, getNexconnChatToken } from "../services/api";
+import {
+  ApiHttpError,
+  getNexconnChatStatus,
+  getNexconnChatToken,
+} from "../services/api";
 import {
   ConnectionStatus,
   connectNexconnWithToken,
@@ -125,6 +129,19 @@ export function NexconnProvider({ children }: { children: ReactNode }) {
     setError("");
 
     try {
+      const chatStatus = await getNexconnChatStatus();
+      if (activeUserIdRef.current !== user.id) return;
+
+      setNexconnUserId(chatStatus.nexconnUserId);
+      setAreaCode(chatStatus.areaCode);
+
+      if (!chatStatus.configured) {
+        setConfigured(false);
+        setStatus("unconfigured");
+        setError("");
+        return;
+      }
+
       const tokenPayload = await getNexconnChatToken();
       if (activeUserIdRef.current !== user.id) return;
 

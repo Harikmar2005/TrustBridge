@@ -5,7 +5,10 @@ import { analyzeMessageForFraud } from "../services/fraud.rules";
 import { toNexconnUserId } from "../services/nexconn.service";
 import { createNotification } from "../services/notification.service";
 import { createSecurityEventAndAlert } from "../services/security.service";
-import { getTranslationProvider } from "../services/translation.service";
+import {
+  getTranslationProvider,
+  UnsupportedTranslationLanguageError,
+} from "../services/translation.service";
 import { recalculateUserTrustScore } from "../services/trust.service";
 import { emitToConversation, emitToUser } from "../socket";
 import { AuthenticatedRequest } from "../types/auth";
@@ -367,12 +370,29 @@ export function sendMessage(req: AuthenticatedRequest, res: Response): void {
   }
 
   const oneMinAgo = new Date(Date.now() - 60 * 1000).toISOString();
+  const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
   const recentCount =
     db
       .prepare<[string, string], { cnt: number }>(
         "SELECT COUNT(*) AS cnt FROM messages WHERE senderId = ? AND createdAt >= ?"
       )
       .get(user.id, oneMinAgo)?.cnt ?? 0;
+
+  const duplicateMessageCount =
+    db
+      .prepare<[string, string, string], { cnt: number }>(
+        "SELECT COUNT(*) AS cnt FROM messages WHERE senderId = ? AND LOWER(TRIM(content)) = LOWER(?) AND createdAt >= ?"
+      )
+      .get(user.id, content, fiveMinAgo)?.cnt ?? 0;
+
+  const recentSuspiciousCount =
+    db
+      .prepare<[string, string], { cnt: number }>(
+        "SELECT COUNT(*) AS cnt FROM messages WHERE senderId = ? AND riskLevel IN ('MEDIUM', 'HIGH', 'CRITICAL') AND createdAt >= ?"
+      )
+      .get(user.id, oneDayAgo)?.cnt ?? 0;
 
   const burstPolicy = db
     .prepare<[string], { value: string }>(
@@ -384,6 +404,8 @@ export function sendMessage(req: AuthenticatedRequest, res: Response): void {
     content,
     recentMessageCountLastMinute: recentCount + 1,
     burstThreshold: Number.parseInt(burstPolicy?.value ?? "6", 10) || 6,
+    recentSuspiciousCount,
+    duplicateMessageCount,
   });
 
   const deliveryTransport =
@@ -723,6 +745,15 @@ export async function translateMessage(
       data: translation,
     });
   } catch (error) {
+    if (error instanceof UnsupportedTranslationLanguageError) {
+      res.status(400).json({
+        success: false,
+        code: "UNSUPPORTED_LANGUAGE",
+        message: error.message,
+      });
+      return;
+    }
+
     res.status(502).json({
       success: false,
       message:

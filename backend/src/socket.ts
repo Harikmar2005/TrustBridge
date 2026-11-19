@@ -156,12 +156,29 @@ export function initSocketServer(httpServer: HttpServer): SocketIOServer {
           }
 
           const oneMinAgo = new Date(Date.now() - 60 * 1000).toISOString();
+          const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+          const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
           const recentCount =
             db
               .prepare<[string, string], { cnt: number }>(
                 "SELECT COUNT(*) AS cnt FROM messages WHERE senderId = ? AND createdAt >= ?"
               )
               .get(user.id, oneMinAgo)?.cnt ?? 0;
+
+          const duplicateMessageCount =
+            db
+              .prepare<[string, string, string], { cnt: number }>(
+                "SELECT COUNT(*) AS cnt FROM messages WHERE senderId = ? AND LOWER(TRIM(content)) = LOWER(?) AND createdAt >= ?"
+              )
+              .get(user.id, content, fiveMinAgo)?.cnt ?? 0;
+
+          const recentSuspiciousCount =
+            db
+              .prepare<[string, string], { cnt: number }>(
+                "SELECT COUNT(*) AS cnt FROM messages WHERE senderId = ? AND riskLevel IN ('MEDIUM', 'HIGH', 'CRITICAL') AND createdAt >= ?"
+              )
+              .get(user.id, oneDayAgo)?.cnt ?? 0;
 
           const burstPolicy = db
             .prepare<[string], { value: string }>(
@@ -173,6 +190,8 @@ export function initSocketServer(httpServer: HttpServer): SocketIOServer {
             content,
             recentMessageCountLastMinute: recentCount + 1,
             burstThreshold: Number.parseInt(burstPolicy?.value ?? "6", 10) || 6,
+            recentSuspiciousCount,
+            duplicateMessageCount,
           });
 
           const id = crypto.randomUUID();

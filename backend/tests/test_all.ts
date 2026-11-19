@@ -583,6 +583,116 @@ async function runTests() {
     "Sender can attach Nexconn messageId reference to persisted TrustBridge message"
   );
 
+  // 13. Phase 4, 6 & 7 security & validation regressions
+  const benignLinkMsg = await dispatch(
+    "POST",
+    `/api/messages/${convId}`,
+    {
+      content: "Tracking details are posted at https://example.com/orders/12345",
+      deliveryTransport: "nexconn",
+    },
+    { cookie: freshBuyerCookie }
+  );
+  assert(
+    benignLinkMsg.statusCode === 201 &&
+      benignLinkMsg.body.data?.riskLevel === "LOW" &&
+      !benignLinkMsg.body.safetyNotice,
+    "Benign HTTPS link produces LOW advisory without false-positive fraud flag"
+  );
+
+  const unrelatedDisputeView = await dispatch(
+    "GET",
+    `/api/disputes/${disputeId}`,
+    undefined,
+    { cookie: thirdCookie }
+  );
+  assert(
+    unrelatedDisputeView.statusCode === 403,
+    "Unrelated user denied access to another user's dispute (403)"
+  );
+
+  const unrelatedDisputeReply = await dispatch(
+    "POST",
+    `/api/disputes/${disputeId}/responses`,
+    { message: "Trying to inject a reply into someone else's dispute." },
+    { cookie: thirdCookie }
+  );
+  assert(
+    unrelatedDisputeReply.statusCode === 403,
+    "Unrelated user cannot post response to another user's dispute (403)"
+  );
+
+  const replyAfterResolved = await dispatch(
+    "POST",
+    `/api/disputes/${disputeId}/responses`,
+    { message: "Attempting reply after case was resolved." },
+    { cookie: freshBuyerCookie }
+  );
+  assert(
+    replyAfterResolved.statusCode === 400,
+    "Non-admin cannot append responses after dispute is RESOLVED (400)"
+  );
+
+  const idorDisputeConv = await dispatch(
+    "POST",
+    "/api/disputes",
+    {
+      counterpartyId: sellerId,
+      conversationId: convId,
+      category: "Delivery",
+      subject: "Third party unauthorized reference",
+      description:
+        "Attempting to attach an unrelated buyer-seller conversation to a new dispute.",
+    },
+    { cookie: thirdCookie }
+  );
+  assert(
+    idorDisputeConv.statusCode === 403,
+    "Dispute creation rejects unauthorized conversationId reference (403)"
+  );
+
+  const idorReportConv = await dispatch(
+    "POST",
+    "/api/users/report",
+    {
+      reportedUserId: sellerId,
+      conversationId: convId,
+      reason: "Unauthorized link test",
+      details:
+        "Attempting to flag a conversation that the reporter does not participate in.",
+    },
+    { cookie: thirdCookie }
+  );
+  assert(
+    idorReportConv.statusCode === 403,
+    "Account report rejects unauthorized conversationId reference (403)"
+  );
+
+  const unsupportedLangRes = await dispatch(
+    "POST",
+    `/api/messages/${msg1Id}/translate`,
+    { targetLanguage: "zz-invalid" },
+    { cookie: freshBuyerCookie }
+  );
+  assert(
+    unsupportedLangRes.statusCode === 400 &&
+      unsupportedLangRes.body.code === "UNSUPPORTED_LANGUAGE",
+    "Translation endpoint rejects unsupported targetLanguage with 400"
+  );
+
+  const unconfiguredTranslateRes = await dispatch(
+    "POST",
+    `/api/messages/${msg1Id}/translate`,
+    { targetLanguage: "es" },
+    { cookie: freshBuyerCookie }
+  );
+  assert(
+    unconfiguredTranslateRes.statusCode === 200 &&
+      unconfiguredTranslateRes.body.data?.configured === false &&
+      unconfiguredTranslateRes.body.data?.translatedText === null,
+    "Unconfigured translation provider returns honest unconfigured status without fabricated text"
+  );
+
   console.log(`\n========================================`);
   console.log(`RESULTS: ${passed} passed, ${failed} failed`);
   console.log(`========================================`);

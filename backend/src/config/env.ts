@@ -42,6 +42,17 @@ const envSchema = z.object({
   NEXCONN_APP_SECRET: z.string().optional().default(''),
   NEXCONN_AREA_CODE: z.enum(['SG', 'NA', 'SA', 'BJ', 'OM']).default('SG'),
   NEXCONN_API_BASE_URL: z.string().optional().default(''),
+}).superRefine((data, ctx) => {
+  if (
+    data.NODE_ENV === 'production' &&
+    data.JWT_SECRET === 'trustbridge-dev-secret-key-change-in-production-32chars'
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['JWT_SECRET'],
+      message: 'JWT_SECRET must be explicitly set to a unique secret in production.',
+    });
+  }
 });
 
 const parsedEnv = envSchema.safeParse({

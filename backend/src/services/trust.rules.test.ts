@@ -69,3 +69,45 @@ test("penalizes confirmed disputes and policy violations transparently", () => {
   assert.ok(penalized.score < clean.score);
   assert.ok(penalized.factors.some((f) => f.impact === "negative"));
 });
+
+test("does not treat an active unverified user as fraudulent and produces deterministic results", () => {
+  const input = {
+    accountAgeDays: 14,
+    profileCompletenessPct: 80,
+    emailVerified: false,
+    messageCount: 4,
+    activeConversations: 1,
+    completedTransactions: 0,
+    confirmedDisputesAgainst: 0,
+    confirmedPolicyViolations: 0,
+    verifiedSuspiciousEvents: 0,
+    nowIso: "2026-01-01T00:00:00.000Z",
+  };
+
+  const first = calculateExplainableTrustScore(input);
+  const second = calculateExplainableTrustScore(input);
+
+  assert.deepEqual(first, second);
+  assert.equal(first.insufficientData, false);
+  assert.ok(first.score !== null && first.score >= 55 && first.score < 85);
+  assert.equal(first.factors.some((f) => f.impact === "negative"), false);
+});
+
+test("clamps out-of-range profile completeness and negative counters cleanly", () => {
+  const clamped = calculateExplainableTrustScore({
+    accountAgeDays: -5,
+    profileCompletenessPct: 140,
+    emailVerified: true,
+    messageCount: 3,
+    activeConversations: 1,
+    completedTransactions: -2,
+    confirmedDisputesAgainst: -1,
+    confirmedPolicyViolations: 0,
+    verifiedSuspiciousEvents: 0,
+    nowIso: "2026-01-01T00:00:00.000Z",
+  });
+
+  assert.equal(clamped.insufficientData, false);
+  assert.ok(clamped.factors.some((f) => f.detail === "Profile is 100% complete."));
+  assert.ok(clamped.factors.some((f) => f.detail === "Account active for 0 days."));
+});

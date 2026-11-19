@@ -415,14 +415,19 @@ export function reportAccount(
   const conversationId = req.body?.conversationId
     ? String(req.body.conversationId).trim()
     : null;
-  const reason = String(req.body?.reason ?? "").trim();
+  const reason = String(req.body?.reason ?? "").trim().slice(0, 120);
   const details = String(req.body?.details ?? "").trim();
 
-  if (!reportedUserId || reason.length < 3 || details.length < 10) {
+  if (
+    !reportedUserId ||
+    reason.length < 3 ||
+    details.length < 10 ||
+    details.length > 2000
+  ) {
     res.status(400).json({
       success: false,
       message:
-        "Reported user, reason, and detailed explanation (min 10 chars) are required.",
+        "Reported user, reason (min 3 chars), and detailed explanation (10-2000 chars) are required.",
     });
     return;
   }
@@ -447,6 +452,43 @@ export function reportAccount(
       message: "Reported account not found.",
     });
     return;
+  }
+
+  if (conversationId) {
+    const conv = db
+      .prepare<[string], { id: string; buyerId: string; sellerId: string }>(
+        "SELECT id, buyerId, sellerId FROM conversations WHERE id = ?"
+      )
+      .get(conversationId);
+
+    if (!conv) {
+      res.status(404).json({
+        success: false,
+        message: "Referenced conversation not found.",
+      });
+      return;
+    }
+
+    const involvesBoth =
+      (conv.buyerId === req.user.id && conv.sellerId === reportedUserId) ||
+      (conv.sellerId === req.user.id && conv.buyerId === reportedUserId);
+
+    if (!involvesBoth) {
+      createSecurityEventAndAlert({
+        userId: req.user.id,
+        eventType: "UNAUTHORIZED_REPORT_REFERENCE",
+        severity: "HIGH",
+        description: `User ${req.user.email} attempted to attach report to unauthorized conversation ${conversationId}.`,
+        metadata: { conversationId, actorId: req.user.id, reportedUserId },
+      });
+
+      res.status(403).json({
+        success: false,
+        message:
+          "Access denied. You can only link reports to conversations you participate in with the reported user.",
+      });
+      return;
+    }
   }
 
   const id = crypto.randomUUID();

@@ -3,6 +3,7 @@ import { Response } from "express";
 import { db } from "../config/database";
 import { recordAuditLog } from "../services/audit.service";
 import { createNotification } from "../services/notification.service";
+import { createSecurityEventAndAlert } from "../services/security.service";
 import { emitToUser } from "../socket";
 import { AuthenticatedRequest } from "../types/auth";
 
@@ -66,18 +67,27 @@ export function createDispute(
   const conversationId = req.body?.conversationId
     ? String(req.body.conversationId).trim()
     : null;
-  const category = String(req.body?.category ?? "").trim();
-  const subject = String(req.body?.subject ?? "").trim();
+  const category = String(req.body?.category ?? "").trim().slice(0, 80);
+  const subject = String(req.body?.subject ?? "").trim().slice(0, 160);
   const description = String(req.body?.description ?? "").trim();
   const evidence = Array.isArray(req.body?.evidence)
-    ? req.body.evidence.map((item: unknown) => String(item).trim()).filter(Boolean)
+    ? req.body.evidence
+        .map((item: unknown) => String(item).trim().slice(0, 500))
+        .filter(Boolean)
+        .slice(0, 10)
     : [];
 
-  if (!counterpartyId || category.length < 2 || subject.length < 4 || description.length < 15) {
+  if (
+    !counterpartyId ||
+    category.length < 2 ||
+    subject.length < 4 ||
+    description.length < 15 ||
+    description.length > 4000
+  ) {
     res.status(400).json({
       success: false,
       message:
-        "Counterparty, category, subject (min 4 chars), and description (min 15 chars) are required.",
+        "Counterparty, category, subject (min 4 chars), and description (15-4000 chars) are required.",
     });
     return;
   }
@@ -106,6 +116,38 @@ export function createDispute(
 
   const buyerId = req.user.role === "buyer" ? req.user.id : counterparty.id;
   const sellerId = req.user.role === "seller" ? req.user.id : counterparty.id;
+
+  if (conversationId) {
+    const conv = db
+      .prepare<[string], { id: string; buyerId: string; sellerId: string }>(
+        "SELECT id, buyerId, sellerId FROM conversations WHERE id = ?"
+      )
+      .get(conversationId);
+
+    if (!conv) {
+      res.status(404).json({
+        success: false,
+        message: "Referenced conversation not found.",
+      });
+      return;
+    }
+
+    if (conv.buyerId !== buyerId || conv.sellerId !== sellerId) {
+      createSecurityEventAndAlert({
+        userId: req.user.id,
+        eventType: "UNAUTHORIZED_DISPUTE_REFERENCE",
+        severity: "HIGH",
+        description: `User ${req.user.email} attempted to link dispute to unauthorized conversation ${conversationId}.`,
+        metadata: { conversationId, actorId: req.user.id, counterpartyId },
+      });
+
+      res.status(403).json({
+        success: false,
+        message: "Access denied. Referenced conversation does not match participants.",
+      });
+      return;
+    }
+  }
 
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
@@ -232,13 +274,13 @@ export function addDisputeResponse(
   const disputeId = String(req.params.id);
   const message = String(req.body?.message ?? "").trim();
   const evidenceText = req.body?.evidenceText
-    ? String(req.body.evidenceText).trim()
+    ? String(req.body.evidenceText).trim().slice(0, 1000)
     : null;
 
-  if (message.length < 3) {
+  if (message.length < 3 || message.length > 4000) {
     res.status(400).json({
       success: false,
-      message: "Response message must contain at least 3 characters.",
+      message: "Response message must contain between 3 and 4000 characters.",
     });
     return;
   }
@@ -260,6 +302,17 @@ export function addDisputeResponse(
     req.user.role !== "admin"
   ) {
     res.status(403).json({ success: false, message: "Access denied." });
+    return;
+  }
+
+  if (
+    req.user.role !== "admin" &&
+    (dispute.status === "RESOLVED" || dispute.status === "REJECTED")
+  ) {
+    res.status(400).json({
+      success: false,
+      message: "This dispute has been finalized and is closed to further replies.",
+    });
     return;
   }
 

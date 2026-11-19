@@ -243,6 +243,19 @@ export function requestAccountDeletion() {
 }
 
 // Messaging & Nexconn Chat Token & Translation
+export async function getNexconnChatStatus(): Promise<{
+  configured: boolean;
+  areaCode: "SG" | "NA" | "SA" | "BJ" | "OM";
+  nexconnUserId: string;
+}> {
+  const res = await apiRequest("/chat/status");
+  return {
+    configured: Boolean(res.configured),
+    areaCode: (res.areaCode as "SG" | "NA" | "SA" | "BJ" | "OM") || "SG",
+    nexconnUserId: String(res.nexconnUserId || ""),
+  };
+}
+
 export async function getNexconnChatToken(): Promise<{
   token: string;
   nexconnUserId: string;
