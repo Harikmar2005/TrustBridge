@@ -1,6 +1,7 @@
 import { Router } from "express";
 import {
   attachNexconnMessageId,
+  broadcastMessageFallback,
   createConversation,
   deleteMessage,
   getConversations,
@@ -20,6 +21,7 @@ router.post("/conversations", createConversation);
 
 router.patch("/:id/read", markConversationRead);
 router.patch("/:messageId/nexconn", attachNexconnMessageId);
+router.post("/:messageId/fallback", broadcastMessageFallback);
 router.post("/:messageId/translate", translateMessage);
 router.delete("/:messageId", deleteMessage);
 

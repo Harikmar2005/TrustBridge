@@ -583,6 +583,71 @@ async function runTests() {
     "Sender can attach Nexconn messageId reference to persisted TrustBridge message"
   );
 
+  // Phase 1 fallback broadcast & unread-only receipt checks
+  const sellerFallbackAttempt = await dispatch(
+    "POST",
+    `/api/messages/${nexconnTransportMsg.body.data.id}/fallback`,
+    undefined,
+    { cookie: sellerCookie }
+  );
+  assert(
+    sellerFallbackAttempt.statusCode === 403,
+    "Non-sender cannot trigger Socket.IO fallback broadcast for another user's message (403)"
+  );
+
+  const buyerFallbackOk = await dispatch(
+    "POST",
+    `/api/messages/${nexconnTransportMsg.body.data.id}/fallback`,
+    undefined,
+    { cookie: freshBuyerCookie }
+  );
+  assert(
+    buyerFallbackOk.statusCode === 200 &&
+      buyerFallbackOk.body.data?.id === nexconnTransportMsg.body.data.id,
+    "Sender can trigger Socket.IO fallback broadcast without duplicating message ID"
+  );
+
+  const legacyUnreadMsg = await dispatch(
+    "POST",
+    `/api/messages/${convId}`,
+    {
+      content: "Legacy socket message before Nexconn ID",
+      deliveryTransport: "socket",
+    },
+    { cookie: freshBuyerCookie }
+  );
+  assert(legacyUnreadMsg.statusCode === 201, "Legacy unread message persisted");
+
+  const sellerReadMixRes = await dispatch(
+    "PATCH",
+    `/api/messages/${convId}/read`,
+    { deliveryTransport: "nexconn" },
+    { cookie: sellerCookie }
+  );
+  assert(
+    sellerReadMixRes.statusCode === 200 &&
+      sellerReadMixRes.body.markedCount >= 2 &&
+      Array.isArray(sellerReadMixRes.body.markedNexconnMessageIds) &&
+      sellerReadMixRes.body.markedNexconnMessageIds.includes("nc-test-msg-001") &&
+      sellerReadMixRes.body.hasLegacyUnread === true,
+    "PATCH /api/messages/:id/read returns unread Nexconn IDs and detects legacy unread messages"
+  );
+
+  const sellerRepeatReadRes = await dispatch(
+    "PATCH",
+    `/api/messages/${convId}/read`,
+    { deliveryTransport: "nexconn" },
+    { cookie: sellerCookie }
+  );
+  assert(
+    sellerRepeatReadRes.statusCode === 200 &&
+      sellerRepeatReadRes.body.markedCount === 0 &&
+      Array.isArray(sellerRepeatReadRes.body.markedNexconnMessageIds) &&
+      sellerRepeatReadRes.body.markedNexconnMessageIds.length === 0 &&
+      sellerRepeatReadRes.body.hasLegacyUnread === false,
+    "Repeated PATCH /api/messages/:id/read returns zero unread receipts to prevent redundant sends"
+  );
+
   // 13. Phase 4, 6 & 7 security & validation regressions
   const benignLinkMsg = await dispatch(
     "POST",

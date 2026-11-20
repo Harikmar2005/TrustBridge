@@ -318,6 +318,12 @@ export function attachMessageNexconnId(
   });
 }
 
+export function triggerMessageSocketFallback(messageId: string) {
+  return apiRequest<ChatMessage>(`/messages/${messageId}/fallback`, {
+    method: "POST",
+  });
+}
+
 export function markConversationRead(
   conversationId: string,
   deliveryTransport?: "nexconn" | "socket"

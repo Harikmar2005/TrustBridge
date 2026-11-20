@@ -558,6 +558,95 @@ export function attachNexconnMessageId(
   });
 }
 
+// POST /api/messages/:messageId/fallback
+// Broadcasts an already-persisted message over Socket.IO when client Nexconn delivery fails
+// without creating a duplicate SQLite row or re-running fraud/trust scoring.
+export function broadcastMessageFallback(
+  req: AuthenticatedRequest,
+  res: Response
+): void {
+  const user = req.user;
+  const messageId = String(req.params.messageId);
+
+  if (!user) {
+    res.status(401).json({ success: false, message: "Authentication required." });
+    return;
+  }
+
+  const row = db
+    .prepare<
+      [string],
+      {
+        id: string;
+        conversationId: string;
+        senderId: string;
+        senderName: string;
+        content: string;
+        riskLevel: string;
+        nexconnMessageId: string | null;
+        isDeleted: number;
+        createdAt: string;
+      }
+    >(
+      `SELECT
+         m.id,
+         m.conversationId,
+         m.senderId,
+         u.fullName AS senderName,
+         m.content,
+         m.riskLevel,
+         m.nexconnMessageId,
+         m.isDeleted,
+         m.createdAt
+       FROM messages m
+       JOIN users u ON u.id = m.senderId
+       WHERE m.id = ?`
+    )
+    .get(messageId);
+
+  if (!row) {
+    res.status(404).json({ success: false, message: "Message not found." });
+    return;
+  }
+
+  if (row.senderId !== user.id) {
+    res.status(403).json({
+      success: false,
+      message: "Only the message sender can trigger Socket.IO fallback delivery.",
+    });
+    return;
+  }
+
+  if (row.isDeleted) {
+    res.status(400).json({
+      success: false,
+      message: "Deleted messages cannot be broadcast.",
+    });
+    return;
+  }
+
+  const payload = {
+    id: row.id,
+    conversationId: row.conversationId,
+    senderId: row.senderId,
+    senderName: row.senderName,
+    content: row.content,
+    riskLevel: row.riskLevel,
+    nexconnMessageId: row.nexconnMessageId,
+    isDeleted: false,
+    readByOther: false,
+    createdAt: row.createdAt,
+  };
+
+  emitToConversation(row.conversationId, "message:new", payload);
+
+  res.status(200).json({
+    success: true,
+    message: "Socket.IO fallback broadcast dispatched.",
+    data: payload,
+  });
+}
+
 // PATCH /api/messages/:id/read
 export function markConversationRead(
   req: AuthenticatedRequest,
@@ -588,28 +677,41 @@ export function markConversationRead(
   }
 
   const unreadMessages = db
-    .prepare<[string, string, string], { id: string }>(
-      `SELECT m.id FROM messages m
+    .prepare<
+      [string, string, string],
+      { id: string; nexconnMessageId: string | null }
+    >(
+      `SELECT m.id, m.nexconnMessageId FROM messages m
        LEFT JOIN message_reads mr ON mr.messageId = m.id AND mr.userId = ?
-       WHERE m.conversationId = ? AND m.senderId != ? AND mr.id IS NULL`
+       WHERE m.conversationId = ? AND m.senderId != ? AND m.isDeleted = 0 AND mr.id IS NULL`
     )
     .all(user.id, conversationId, user.id);
 
   const now = new Date().toISOString();
-  db.transaction(() => {
-    const insertRead = db.prepare<[string, string, string, string, string]>(
-      `INSERT OR IGNORE INTO message_reads (id, messageId, conversationId, userId, readAt)
-       VALUES (?, ?, ?, ?, ?)`
-    );
-    for (const msg of unreadMessages) {
-      insertRead.run(crypto.randomUUID(), msg.id, conversationId, user.id, now);
-    }
-  });
+  if (unreadMessages.length > 0) {
+    db.transaction(() => {
+      const insertRead = db.prepare<[string, string, string, string, string]>(
+        `INSERT OR IGNORE INTO message_reads (id, messageId, conversationId, userId, readAt)
+         VALUES (?, ?, ?, ?, ?)`
+      );
+      for (const msg of unreadMessages) {
+        insertRead.run(crypto.randomUUID(), msg.id, conversationId, user.id, now);
+      }
+    });
+  }
+
+  const markedNexconnMessageIds = unreadMessages
+    .map((m) => m.nexconnMessageId)
+    .filter((id): id is string => Boolean(id));
+  const hasLegacyUnread = unreadMessages.some((m) => !m.nexconnMessageId);
 
   const deliveryTransport =
     req.body?.deliveryTransport === "nexconn" ? "nexconn" : "socket";
 
-  if (deliveryTransport !== "nexconn") {
+  if (
+    unreadMessages.length > 0 &&
+    (deliveryTransport !== "nexconn" || hasLegacyUnread)
+  ) {
     emitToConversation(conversationId, "conversation:read", {
       conversationId,
       readerId: user.id,
@@ -620,6 +722,8 @@ export function markConversationRead(
   res.status(200).json({
     success: true,
     markedCount: unreadMessages.length,
+    markedNexconnMessageIds,
+    hasLegacyUnread,
   });
 }
 

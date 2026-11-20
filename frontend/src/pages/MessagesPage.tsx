@@ -4,10 +4,12 @@ import { useNavigate, useParams } from "react-router-dom";
 import ChatWindow from "../components/messaging/ChatWindow";
 import ConversationList from "../components/messaging/ConversationList";
 import NewConversationModal from "../components/messaging/NewConversationModal";
+import NexconnStatusBanner from "../components/messaging/NexconnStatusBanner";
 import { useAuth } from "../contexts/AuthContext";
 import { useNexconn } from "../contexts/NexconnContext";
 import { ChannelType, MessageType } from "../services/nexconnService";
 import {
+  broadcastMessageSocketFallback,
   fetchConversationMessages,
   fetchConversations,
   markThreadRead,
@@ -18,6 +20,9 @@ import {
   translateChatMessage,
 } from "../services/messageService";
 import {
+  deleteMessageWithNexconnFallback,
+  deliverNexconnOrFallback,
+  filterUnsentReceiptIds,
   findAuthorizedConversationForNexconnChannel,
   mergeChatMessage,
   parseNexconnExtra,
@@ -45,8 +50,15 @@ export default function MessagesPage() {
   const {
     status: nexconnStatus,
     connected: nexconnConnected,
+    configured: nexconnConfigured,
     nexconnUserId: currentNexconnUserId,
     error: nexconnError,
+    reconnectAttempt,
+    maxReconnectAttempts,
+    manualReconnecting,
+    reconnectNotice,
+    reconnect,
+    clearReconnectNotice,
     sendDirectText,
     sendReadReceipt,
     deleteMessageForAll,
@@ -90,10 +102,35 @@ export default function MessagesPage() {
   const initialSelectionDoneRef = useRef(false);
   const prevRouteConvIdRef = useRef<string | undefined>(routeConvId);
   const conversationsRef = useRef<ConversationSummary[]>([]);
+  const sentReceiptIdsRef = useRef<Set<string>>(new Set());
+  const hadDisconnectedNexconnRef = useRef(false);
 
   useEffect(() => {
     conversationsRef.current = conversations;
   }, [conversations]);
+
+  useEffect(() => {
+    sentReceiptIdsRef.current.clear();
+    hadDisconnectedNexconnRef.current = false;
+  }, [user?.id]);
+
+  const acknowledgeNexconnReceipts = useCallback(
+    (participantNexconnId: string | undefined, candidateIds: string[]) => {
+      if (!nexconnConnected || !participantNexconnId) return;
+      const unsent = filterUnsentReceiptIds(
+        candidateIds,
+        sentReceiptIdsRef.current
+      );
+      if (unsent.length === 0) return;
+      unsent.forEach((id) => sentReceiptIdsRef.current.add(id));
+      void sendReadReceipt(participantNexconnId, unsent).then((ok) => {
+        if (!ok) {
+          unsent.forEach((id) => sentReceiptIdsRef.current.delete(id));
+        }
+      });
+    },
+    [nexconnConnected, sendReadReceipt]
+  );
 
   useEffect(() => {
     const prevRoute = prevRouteConvIdRef.current;
@@ -133,6 +170,32 @@ export default function MessagesPage() {
       setLoadingConvs(false);
     }
   }, []);
+
+  // Reconcile messages cleanly when Nexconn recovers after a disconnect/reconnect cycle
+  useEffect(() => {
+    if (
+      nexconnStatus === "reconnecting" ||
+      nexconnStatus === "disconnected" ||
+      nexconnStatus === "error"
+    ) {
+      hadDisconnectedNexconnRef.current = true;
+      return;
+    }
+
+    if (nexconnConnected && hadDisconnectedNexconnRef.current) {
+      hadDisconnectedNexconnRef.current = false;
+      void refreshConversations();
+      if (selectedId) {
+        void fetchConversationMessages(selectedId)
+          .then((serverMsgs) => {
+            setMessages((prev) =>
+              reconcileConversationMessages(serverMsgs, prev, selectedId)
+            );
+          })
+          .catch(() => {});
+      }
+    }
+  }, [nexconnStatus, nexconnConnected, selectedId, refreshConversations]);
 
   useEffect(() => {
     let active = true;
@@ -181,32 +244,19 @@ export default function MessagesPage() {
         );
         setLoadedConvId(selectedId);
         setError("");
-        await markThreadRead(
+        const readResult = await markThreadRead(
           selectedId,
           nexconnConnected ? "nexconn" : "socket"
         );
         const list = await fetchConversations();
         if (active) {
           setConversations(list);
-          if (nexconnConnected) {
+          if (nexconnConnected && readResult.markedNexconnMessageIds.length > 0) {
             const conv = list.find((c) => c.id === selectedId);
-            const unreadIncomingNexconnIds = msgs
-              .filter(
-                (m) =>
-                  m.senderId !== user?.id &&
-                  !m.isDeleted &&
-                  Boolean(m.nexconnMessageId)
-              )
-              .map((m) => m.nexconnMessageId as string);
-            if (
-              conv?.participantNexconnUserId &&
-              unreadIncomingNexconnIds.length > 0
-            ) {
-              void sendReadReceipt(
-                conv.participantNexconnUserId,
-                unreadIncomingNexconnIds
-              );
-            }
+            acknowledgeNexconnReceipts(
+              conv?.participantNexconnUserId,
+              readResult.markedNexconnMessageIds
+            );
           }
         }
       } catch (err) {
@@ -222,7 +272,7 @@ export default function MessagesPage() {
     return () => {
       active = false;
     };
-  }, [selectedId, nexconnConnected, sendReadReceipt, user?.id]);
+  }, [selectedId, nexconnConnected, acknowledgeNexconnReceipts]);
 
   // Nexconn real-time messaging listeners (authoritative when Nexconn is connected)
   useEffect(() => {
@@ -296,20 +346,29 @@ export default function MessagesPage() {
             setMessages((prev) => mergeChatMessage(prev, mapped));
 
             if (!isFromMe) {
-              void markThreadRead(authorizedConv.id, "nexconn");
-              if (authorizedConv.participantNexconnUserId) {
-                void sendReadReceipt(authorizedConv.participantNexconnUserId, [
-                  msg.messageId,
-                ]);
-              }
+              const targetNexconnPeerId =
+                authorizedConv.participantNexconnUserId;
+              const activeConvId = authorizedConv.id;
+              void markThreadRead(activeConvId, "nexconn")
+                .then((readResult) => {
+                  acknowledgeNexconnReceipts(targetNexconnPeerId, [
+                    msg.messageId,
+                    ...readResult.markedNexconnMessageIds,
+                  ]);
+                })
+                .catch(() => {
+                  acknowledgeNexconnReceipts(targetNexconnPeerId, [
+                    msg.messageId,
+                  ]);
+                });
               // Sync server-evaluated fraud riskLevel into state without duplicates
-              void fetchConversationMessages(authorizedConv.id)
+              void fetchConversationMessages(activeConvId)
                 .then((serverMsgs) => {
                   setMessages((prev) =>
                     reconcileConversationMessages(
                       serverMsgs,
                       prev,
-                      authorizedConv!.id
+                      activeConvId
                     )
                   );
                 })
@@ -395,16 +454,17 @@ export default function MessagesPage() {
     user?.fullName,
     currentNexconnUserId,
     refreshConversations,
-    sendReadReceipt,
+    acknowledgeNexconnReceipts,
     subscribeMessages,
     subscribeDeletes,
     subscribeReadReceipts,
     subscribeOfflineSync,
   ]);
 
-  // Legacy Socket.IO chat delivery fallback ONLY when Nexconn is not connected (prevents duplicate delivery)
+  // Socket.IO real-time listeners remain active even when Nexconn is connected
+  // to support mixed-transport peers and fallback broadcasts; mergeChatMessage deduplicates by id.
   useEffect(() => {
-    if (!socket || nexconnConnected) return;
+    if (!socket) return;
 
     const joinActive = () => {
       if (selectedId) {
@@ -421,13 +481,48 @@ export default function MessagesPage() {
       }
       setMessages((prev) => mergeChatMessage(prev, incoming));
       if (incoming.senderId !== user?.id) {
-        void markThreadRead(selectedId, "socket");
+        const useNexconnAck =
+          nexconnConnected && Boolean(incoming.nexconnMessageId);
+        void markThreadRead(selectedId, useNexconnAck ? "nexconn" : "socket")
+          .then((readResult) => {
+            if (nexconnConnected) {
+              const conv = conversationsRef.current.find(
+                (c) => c.id === selectedId
+              );
+              const candidateIds = incoming.nexconnMessageId
+                ? [
+                    incoming.nexconnMessageId,
+                    ...readResult.markedNexconnMessageIds,
+                  ]
+                : readResult.markedNexconnMessageIds;
+              acknowledgeNexconnReceipts(
+                conv?.participantNexconnUserId,
+                candidateIds
+              );
+            }
+          })
+          .catch(() => {});
       }
       void refreshConversations();
     };
 
-    const onNotificationNew = () => {
+    const onNotificationNew = (evt?: { conversationId?: string }) => {
       void refreshConversations();
+      if (
+        !nexconnConnected &&
+        evt?.conversationId &&
+        evt.conversationId === selectedId
+      ) {
+        void fetchConversationMessages(selectedId)
+          .then((serverMsgs) => {
+            setMessages((prev) =>
+              reconcileConversationMessages(serverMsgs, prev, selectedId)
+            );
+            return markThreadRead(selectedId, "socket");
+          })
+          .then(() => refreshConversations())
+          .catch(() => {});
+      }
     };
 
     const onRead = (evt: { conversationId: string; readerId: string }) => {
@@ -467,7 +562,14 @@ export default function MessagesPage() {
       socket.off("conversation:read", onRead);
       socket.off("message:deleted", onDeleted);
     };
-  }, [socket, nexconnConnected, selectedId, user?.id, refreshConversations]);
+  }, [
+    socket,
+    nexconnConnected,
+    selectedId,
+    user?.id,
+    refreshConversations,
+    acknowledgeNexconnReceipts,
+  ]);
 
   // Polling fallback only when neither Nexconn nor Socket.IO is connected
   useEffect(() => {
@@ -537,34 +639,31 @@ export default function MessagesPage() {
 
       let created = result.message;
 
-      // 2. Deliver message in real time via Nexconn DirectChannel when connected
+      // 2. Deliver message in real time via Nexconn DirectChannel when connected,
+      // falling back to Socket.IO broadcast on send failure or ambiguous error.
       if (
         useNexconnDelivery &&
         activeConversation?.participantNexconnUserId &&
         created
       ) {
-        const nexconnSend = await sendDirectText({
-          targetNexconnUserId: activeConversation.participantNexconnUserId,
+        const delivery = await deliverNexconnOrFallback({
+          messageId: created.id,
+          conversationId: selectedId,
           text: trimmed,
-          metadata: {
-            trustBridgeMessageId: created.id,
-            trustBridgeConversationId: selectedId,
-            riskLevel: created.riskLevel,
-          },
+          riskLevel: created.riskLevel,
+          targetNexconnUserId: activeConversation.participantNexconnUserId,
+          sendDirectText,
+          saveNexconnRef: saveMessageNexconnRef,
+          triggerSocketFallback: broadcastMessageSocketFallback,
         });
 
-        if (nexconnSend.isOk && nexconnSend.messageId) {
+        if (delivery.nexconnMessageId) {
           created = {
             ...created,
-            nexconnMessageId: nexconnSend.messageId,
+            nexconnMessageId: delivery.nexconnMessageId,
           };
-          void saveMessageNexconnRef(created.id, nexconnSend.messageId).catch(
-            () => {}
-          );
-        } else if (!nexconnSend.isOk) {
-          setError(
-            `Message saved to TrustBridge audit log, but real-time Nexconn delivery failed (code ${nexconnSend.code}).`
-          );
+        } else if (delivery.transport === "failed" && delivery.error) {
+          setError(delivery.error);
         }
       }
 
@@ -582,35 +681,35 @@ export default function MessagesPage() {
   }
 
   async function handleDelete(messageId: string) {
-    try {
-      const targetMsg = messages.find((m) => m.id === messageId);
-      const useNexconnDelivery =
-        nexconnConnected && Boolean(activeConversation?.participantNexconnUserId);
-      await removeMessage(
-        messageId,
-        useNexconnDelivery ? "nexconn" : "socket"
-      );
-      if (
-        useNexconnDelivery &&
-        activeConversation?.participantNexconnUserId &&
-        targetMsg?.nexconnMessageId
-      ) {
-        void deleteMessageForAll(
-          activeConversation.participantNexconnUserId,
-          targetMsg.nexconnMessageId
-        );
-      }
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === messageId
-            ? { ...m, isDeleted: true, content: "[Message removed by sender]" }
-            : m
-        )
-      );
-      await refreshConversations();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to remove message.");
+    setError("");
+    const targetMsg = messages.find((m) => m.id === messageId);
+    const outcome = await deleteMessageWithNexconnFallback({
+      messageId,
+      nexconnMessageId: targetMsg?.nexconnMessageId,
+      messageCreatedAt: targetMsg?.createdAt,
+      nexconnConnected,
+      participantNexconnUserId: activeConversation?.participantNexconnUserId,
+      deleteNexconnMessage: deleteMessageForAll,
+      removeAuditMessage: removeMessage,
+    });
+
+    if (!outcome.ok) {
+      setError(outcome.error || "Failed to remove message.");
+      return;
     }
+
+    if (outcome.warning) {
+      setError(outcome.warning);
+    }
+
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === messageId
+          ? { ...m, isDeleted: true, content: "[Message removed by sender]" }
+          : m
+      )
+    );
+    await refreshConversations();
   }
 
   async function handleOpenTranslate(msg: ChatMessage) {
@@ -704,55 +803,66 @@ export default function MessagesPage() {
   const showChatOnMobile = Boolean(selectedId);
 
   return (
-    <div className="flex h-[calc(100vh-8.5rem)] min-h-[540px] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white lg:flex-row">
-      <div
-        className={`${
-          showChatOnMobile ? "hidden lg:flex" : "flex flex-1 lg:flex-none"
-        } min-h-0 flex-col`}
-      >
-        <ConversationList
-          conversations={filteredConversations}
-          selectedId={selectedId}
-          search={search}
-          onSearchChange={setSearch}
-          onSelectConversation={handleSelectConversation}
-          onOpenNewConversation={() => setNewConvOpen(true)}
-          loading={loadingConvs}
-          error={convError}
-          onRetry={() => void refreshConversations()}
-          userRole={user?.role}
-        />
-      </div>
+    <div className="flex h-[calc(100vh-8.5rem)] min-h-[540px] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white">
+      <NexconnStatusBanner
+        status={nexconnStatus}
+        configured={nexconnConfigured}
+        error={nexconnError}
+        reconnectAttempt={reconnectAttempt}
+        maxReconnectAttempts={maxReconnectAttempts}
+        manualReconnecting={manualReconnecting}
+        reconnectNotice={reconnectNotice}
+        onReconnect={() => void reconnect()}
+        onDismissNotice={clearReconnectNotice}
+      />
 
-      <div
-        className={`${
-          showChatOnMobile ? "flex" : "hidden lg:flex"
-        } min-h-0 min-w-0 flex-1 flex-col`}
-      >
-        <ChatWindow
-          conversation={activeConversation}
-          messages={messages}
-          currentUserId={user?.id}
-          loading={loadingMessages}
-          error={
-            error ||
-            (nexconnStatus === "error" && nexconnError ? nexconnError : "")
-          }
-          safetyNotice={safetyNotice}
-          composerText={composerText}
-          sending={sending}
-          onComposerChange={setComposerText}
-          onSend={() => void handleSend()}
-          onDeleteMessage={(id) => void handleDelete(id)}
-          onTranslateMessage={(msg) => void handleOpenTranslate(msg)}
-          onOpenReport={() => {
-            setReportError("");
-            setReportFeedback("");
-            setReportOpen(true);
-          }}
-          onBackToList={handleBackToList}
-          onOpenNewConversation={() => setNewConvOpen(true)}
-        />
+      <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+        <div
+          className={`${
+            showChatOnMobile ? "hidden lg:flex" : "flex flex-1 lg:flex-none"
+          } min-h-0 flex-col`}
+        >
+          <ConversationList
+            conversations={filteredConversations}
+            selectedId={selectedId}
+            search={search}
+            onSearchChange={setSearch}
+            onSelectConversation={handleSelectConversation}
+            onOpenNewConversation={() => setNewConvOpen(true)}
+            loading={loadingConvs}
+            error={convError}
+            onRetry={() => void refreshConversations()}
+            userRole={user?.role}
+          />
+        </div>
+
+        <div
+          className={`${
+            showChatOnMobile ? "flex" : "hidden lg:flex"
+          } min-h-0 min-w-0 flex-1 flex-col`}
+        >
+          <ChatWindow
+            conversation={activeConversation}
+            messages={messages}
+            currentUserId={user?.id}
+            loading={loadingMessages}
+            error={error}
+            safetyNotice={safetyNotice}
+            composerText={composerText}
+            sending={sending}
+            onComposerChange={setComposerText}
+            onSend={() => void handleSend()}
+            onDeleteMessage={(id) => void handleDelete(id)}
+            onTranslateMessage={(msg) => void handleOpenTranslate(msg)}
+            onOpenReport={() => {
+              setReportError("");
+              setReportFeedback("");
+              setReportOpen(true);
+            }}
+            onBackToList={handleBackToList}
+            onOpenNewConversation={() => setNewConvOpen(true)}
+          />
+        </div>
       </div>
 
       <NewConversationModal

@@ -109,3 +109,195 @@ export function reconcileConversationMessages(
   }
   return merged;
 }
+
+/**
+ * Checks whether NCEngine.initialize must run for the requested (appKey, areaCode).
+ */
+export function shouldInitializeNexconnSdk(params: {
+  currentAppKey: string | null;
+  currentAreaCode: string | null;
+  nextAppKey: string;
+  nextAreaCode: string;
+}): boolean {
+  if (!params.nextAppKey) {
+    return false;
+  }
+  return (
+    params.currentAppKey !== params.nextAppKey ||
+    params.currentAreaCode !== params.nextAreaCode
+  );
+}
+
+/**
+ * Filters candidate Nexconn message IDs to deduplicated IDs not yet acknowledged.
+ */
+export function filterUnsentReceiptIds(
+  candidateIds: Array<string | null | undefined>,
+  alreadySentIds: ReadonlySet<string>
+): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const raw of candidateIds) {
+    if (typeof raw !== "string") continue;
+    const id = raw.trim();
+    if (!id || alreadySentIds.has(id) || seen.has(id)) continue;
+    seen.add(id);
+    result.push(id);
+  }
+  return result;
+}
+
+export interface NexconnDeliveryResult {
+  transport: "nexconn" | "socket-fallback" | "failed";
+  nexconnMessageId?: string;
+  warning?: string;
+  error?: string;
+}
+
+/**
+ * Attempts real-time delivery via Nexconn DirectChannel for an already-persisted
+ * TrustBridge message, falling back cleanly to Socket.IO broadcast on failure or
+ * ambiguous client errors without creating duplicate SQLite rows.
+ */
+export async function deliverNexconnOrFallback(params: {
+  messageId: string;
+  conversationId: string;
+  text: string;
+  riskLevel?: ChatMessage["riskLevel"];
+  targetNexconnUserId: string;
+  sendDirectText: (input: {
+    targetNexconnUserId: string;
+    text: string;
+    metadata?: NexconnMessageMetadata;
+  }) => Promise<{ isOk: boolean; code: number; messageId?: string }>;
+  saveNexconnRef: (messageId: string, nexconnMessageId: string) => Promise<void>;
+  triggerSocketFallback: (messageId: string) => Promise<unknown>;
+}): Promise<NexconnDeliveryResult> {
+  let failureReason: string;
+
+  try {
+    const nexconnSend = await params.sendDirectText({
+      targetNexconnUserId: params.targetNexconnUserId,
+      text: params.text,
+      metadata: {
+        trustBridgeMessageId: params.messageId,
+        trustBridgeConversationId: params.conversationId,
+        riskLevel: params.riskLevel,
+      },
+    });
+
+    if (nexconnSend.isOk && nexconnSend.messageId) {
+      try {
+        await params.saveNexconnRef(params.messageId, nexconnSend.messageId);
+      } catch {
+        // Message was delivered via Nexconn and persisted in SQLite; non-fatal if ref patch fails
+      }
+      return {
+        transport: "nexconn",
+        nexconnMessageId: nexconnSend.messageId,
+      };
+    }
+
+    failureReason = `Nexconn delivery failed (code ${nexconnSend.code})`;
+  } catch (err) {
+    failureReason =
+      err instanceof Error ? err.message : "Nexconn delivery threw an error";
+  }
+
+  try {
+    await params.triggerSocketFallback(params.messageId);
+    return {
+      transport: "socket-fallback",
+      warning: `${failureReason}; delivered via Socket.IO fallback.`,
+    };
+  } catch (fallbackErr) {
+    const fallbackReason =
+      fallbackErr instanceof Error
+        ? fallbackErr.message
+        : "Socket.IO fallback failed";
+    return {
+      transport: "failed",
+      error: `Message saved to TrustBridge audit log, but real-time delivery failed (${failureReason}; ${fallbackReason}).`,
+    };
+  }
+}
+
+export interface NexconnDeletionOutcome {
+  ok: boolean;
+  transport: "nexconn" | "socket";
+  warning?: string;
+  error?: string;
+}
+
+/**
+ * Coordinates Nexconn remote recall and TrustBridge soft-deletion:
+ * Only suppresses Socket.IO `message:deleted` when a valid `nexconnMessageId`
+ * exists AND Nexconn remote recall succeeds.
+ */
+export async function deleteMessageWithNexconnFallback(params: {
+  messageId: string;
+  nexconnMessageId?: string | null;
+  messageCreatedAt?: string;
+  nexconnConnected: boolean;
+  participantNexconnUserId?: string;
+  deleteNexconnMessage: (
+    targetNexconnUserId: string,
+    nexconnMessageId: string,
+    messageCreatedAt?: string
+  ) => Promise<{ isOk: boolean; error?: string }>;
+  removeAuditMessage: (
+    messageId: string,
+    deliveryTransport: "nexconn" | "socket"
+  ) => Promise<void>;
+}): Promise<NexconnDeletionOutcome> {
+  const canRecallViaNexconn =
+    params.nexconnConnected &&
+    Boolean(params.participantNexconnUserId) &&
+    Boolean(params.nexconnMessageId);
+
+  let nexconnRecalled = false;
+  let recallWarning: string | undefined;
+
+  if (
+    canRecallViaNexconn &&
+    params.participantNexconnUserId &&
+    params.nexconnMessageId
+  ) {
+    try {
+      const delRes = await params.deleteNexconnMessage(
+        params.participantNexconnUserId,
+        params.nexconnMessageId,
+        params.messageCreatedAt
+      );
+      if (delRes.isOk) {
+        nexconnRecalled = true;
+      } else {
+        recallWarning =
+          delRes.error ||
+          "Remote Nexconn recall failed; Socket.IO deletion fallback used.";
+      }
+    } catch (err) {
+      recallWarning =
+        err instanceof Error
+          ? `${err.message}; Socket.IO deletion fallback used.`
+          : "Remote Nexconn recall failed; Socket.IO deletion fallback used.";
+    }
+  }
+
+  const transport: "nexconn" | "socket" = nexconnRecalled ? "nexconn" : "socket";
+
+  try {
+    await params.removeAuditMessage(params.messageId, transport);
+    return {
+      ok: true,
+      transport,
+      ...(recallWarning ? { warning: recallWarning } : {}),
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      transport,
+      error: err instanceof Error ? err.message : "Failed to remove message.",
+    };
+  }
+}

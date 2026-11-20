@@ -13,13 +13,8 @@ import type {
   MessageReadReceiptResponse,
 } from "@nexconn/chat";
 import { useAuth } from "./AuthContext";
+import { getNexconnChatStatus, getNexconnChatToken } from "../services/api";
 import {
-  ApiHttpError,
-  getNexconnChatStatus,
-  getNexconnChatToken,
-} from "../services/api";
-import {
-  ConnectionStatus,
   connectNexconnWithToken,
   deleteDirectMessageForAllViaNexconn,
   disconnectNexconnCleanly,
@@ -31,15 +26,16 @@ import {
   type NexconnAreaCodeString,
 } from "../services/nexconnService";
 import type { NexconnMessageMetadata } from "../utils/nexconnMessages";
+import {
+  createNexconnConnectionManager,
+  DEFAULT_MAX_RECONNECT_ATTEMPTS,
+  type NexconnConnectionState,
+  type NexconnManagerState,
+  type NexconnReconnectNotice,
+  type NexconnReconnectOutcome,
+} from "../utils/nexconnResilience";
 
-export type NexconnConnectionState =
-  | "idle"
-  | "unconfigured"
-  | "connecting"
-  | "connected"
-  | "reconnecting"
-  | "disconnected"
-  | "error";
+export type { NexconnConnectionState, NexconnReconnectNotice, NexconnReconnectOutcome };
 
 type MessageListener = (messages: Array<Message<Record<string, unknown>>>) => void;
 type DeleteListener = (deleted: MessageDeletedInfo[]) => void;
@@ -53,7 +49,12 @@ interface NexconnContextValue {
   nexconnUserId: string;
   areaCode: NexconnAreaCodeString;
   error: string;
-  reconnect: () => Promise<void>;
+  reconnectAttempt: number;
+  maxReconnectAttempts: number;
+  manualReconnecting: boolean;
+  reconnectNotice: NexconnReconnectNotice | null;
+  reconnect: () => Promise<NexconnReconnectOutcome>;
+  clearReconnectNotice: () => void;
   sendDirectText: (params: {
     targetNexconnUserId: string;
     text: string;
@@ -70,30 +71,43 @@ interface NexconnContextValue {
   ) => Promise<boolean>;
   deleteMessageForAll: (
     targetNexconnUserId: string,
-    nexconnMessageId: string
-  ) => Promise<boolean>;
+    nexconnMessageId: string,
+    messageCreatedAt?: string
+  ) => Promise<{ isOk: boolean; error?: string }>;
   subscribeMessages: (listener: MessageListener) => () => void;
   subscribeDeletes: (listener: DeleteListener) => () => void;
   subscribeReadReceipts: (listener: ReadReceiptListener) => () => void;
   subscribeOfflineSync: (listener: OfflineSyncListener) => () => void;
 }
 
+const INITIAL_MANAGER_STATE: NexconnManagerState = {
+  status: "idle",
+  configured: true,
+  nexconnUserId: "",
+  areaCode: "SG",
+  error: "",
+  reconnectAttempt: 0,
+  maxReconnectAttempts: DEFAULT_MAX_RECONNECT_ATTEMPTS,
+  manualReconnecting: false,
+  reconnectNotice: null,
+};
+
 const NexconnContext = createContext<NexconnContextValue | null>(null);
 
 export function NexconnProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
 
-  const [status, setStatus] = useState<NexconnConnectionState>("idle");
-  const [configured, setConfigured] = useState(true);
-  const [nexconnUserId, setNexconnUserId] = useState("");
-  const [areaCode, setAreaCode] = useState<NexconnAreaCodeString>("SG");
-  const [error, setError] = useState("");
+  const [managerState, setManagerState] = useState<NexconnManagerState>(
+    INITIAL_MANAGER_STATE
+  );
 
   const messageListenersRef = useRef<Set<MessageListener>>(new Set());
   const deleteListenersRef = useRef<Set<DeleteListener>>(new Set());
   const receiptListenersRef = useRef<Set<ReadReceiptListener>>(new Set());
   const syncListenersRef = useRef<Set<OfflineSyncListener>>(new Set());
-  const activeUserIdRef = useRef<string | null>(null);
+  const managerRef = useRef<ReturnType<typeof createNexconnConnectionManager> | null>(
+    null
+  );
 
   const subscribeMessages = useCallback((listener: MessageListener) => {
     messageListenersRef.current.add(listener);
@@ -123,155 +137,109 @@ export function NexconnProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const connectCurrentUser = useCallback(async () => {
-    if (!user) return;
-    setStatus("connecting");
-    setError("");
-
-    try {
-      const chatStatus = await getNexconnChatStatus();
-      if (activeUserIdRef.current !== user.id) return;
-
-      setNexconnUserId(chatStatus.nexconnUserId);
-      setAreaCode(chatStatus.areaCode);
-
-      if (!chatStatus.configured) {
-        setConfigured(false);
-        setStatus("unconfigured");
-        setError("");
-        return;
-      }
-
-      const tokenPayload = await getNexconnChatToken();
-      if (activeUserIdRef.current !== user.id) return;
-
-      setConfigured(true);
-      setNexconnUserId(tokenPayload.nexconnUserId);
-      setAreaCode(tokenPayload.areaCode);
-
-      // 1. Initialize NCEngine exactly once
-      initializeNexconnOnce(tokenPayload.appKey, tokenPayload.areaCode);
-
-      // 2. Register connection-status and message handlers BEFORE connecting
-      registerNexconnHandlers({
-        onConnectionStatusChanged(connStatus, code) {
-          if (activeUserIdRef.current !== user.id) return;
-          if (connStatus === ConnectionStatus.CONNECTED) {
-            setStatus("connected");
-            setError("");
-          } else if (
-            connStatus === ConnectionStatus.CONNECTING ||
-            connStatus === ConnectionStatus.SUSPENDED
-          ) {
-            setStatus("reconnecting");
-          } else if (connStatus === ConnectionStatus.DISCONNECTED) {
-            if (code === 6 || code === 31023) {
-              setStatus("disconnected");
-              setError("Messaging session moved to another active client.");
-            } else if (
-              code === 9 ||
-              code === 20 ||
-              code === 31004 ||
-              code === 31030
-            ) {
-              setStatus("error");
-              setError(
-                `Real-time chat authentication failed (code ${String(code)}).`
-              );
-            } else {
-              setStatus("disconnected");
-            }
-          }
+  const getOrCreateManager = useCallback(() => {
+    if (!managerRef.current) {
+      managerRef.current = createNexconnConnectionManager({
+        getChatStatus: getNexconnChatStatus,
+        getChatToken: getNexconnChatToken,
+        initializeSdk: initializeNexconnOnce,
+        registerConnectionHandler: (callbacks) => {
+          registerNexconnHandlers({
+            onConnectionStatusChanged(sdkStatus, code) {
+              callbacks.onConnectionStatusChanged(sdkStatus, code);
+            },
+            onMessagesReceived(messages) {
+              messageListenersRef.current.forEach((fn) => fn(messages));
+            },
+            onMessagesDeleted(deleted) {
+              deleteListenersRef.current.forEach((fn) => fn(deleted));
+            },
+            onReadReceiptsReceived(responses) {
+              receiptListenersRef.current.forEach((fn) => fn(responses));
+            },
+            onOfflineSyncCompleted() {
+              syncListenersRef.current.forEach((fn) => fn());
+            },
+          });
         },
-        onMessagesReceived(messages) {
-          messageListenersRef.current.forEach((fn) => fn(messages));
-        },
-        onMessagesDeleted(deleted) {
-          deleteListenersRef.current.forEach((fn) => fn(deleted));
-        },
-        onReadReceiptsReceived(responses) {
-          receiptListenersRef.current.forEach((fn) => fn(responses));
-        },
-        onOfflineSyncCompleted() {
-          syncListenersRef.current.forEach((fn) => fn());
+        unregisterHandlers: unregisterNexconnHandlers,
+        connectWithToken: connectNexconnWithToken,
+        disconnectCleanly: disconnectNexconnCleanly,
+        isBrowserOnline: () =>
+          typeof navigator === "undefined" ? true : navigator.onLine,
+        onStateChange: (nextState) => {
+          setManagerState(nextState);
         },
       });
-
-      // 3. Connect using the backend-issued token
-      const connRes = await connectNexconnWithToken(tokenPayload.token);
-      if (activeUserIdRef.current !== user.id) return;
-
-      if (connRes.isOk) {
-        setStatus("connected");
-        setError("");
-      } else {
-        setStatus("error");
-        setError(`Nexconn connection failed (code ${connRes.code}).`);
-      }
-    } catch (err) {
-      if (activeUserIdRef.current !== user.id) return;
-
-      if (
-        err instanceof ApiHttpError &&
-        (err.status === 503 || err.code === "NEXCONN_NOT_CONFIGURED")
-      ) {
-        setConfigured(false);
-        setStatus("unconfigured");
-        setError("");
-        return;
-      }
-
-      setStatus("error");
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Unable to connect to real-time messaging."
-      );
     }
-  }, [user]);
+    return managerRef.current;
+  }, []);
 
+  // Sync authenticated user session lifecycle with the resilient connection manager
+  const currentUserId = user?.id ?? null;
   useEffect(() => {
-    if (!user) {
-      activeUserIdRef.current = null;
-      unregisterNexconnHandlers();
-      let active = true;
-      void disconnectNexconnCleanly().finally(() => {
-        if (!active) return;
-        setStatus("idle");
-        setNexconnUserId("");
-        setError("");
-      });
-      return () => {
-        active = false;
-      };
+    const manager = getOrCreateManager();
+    if (!currentUserId) {
+      void manager.stopSession();
+      return;
     }
 
-    const prevUserId = activeUserIdRef.current;
-    activeUserIdRef.current = user.id;
-
-    let cancelled = false;
-    void (async () => {
-      if (prevUserId && prevUserId !== user.id) {
-        await disconnectNexconnCleanly();
-      }
-      if (!cancelled) {
-        await connectCurrentUser();
-      }
-    })();
+    void manager.startSession(currentUserId);
 
     return () => {
-      cancelled = true;
+      void manager.stopSession();
     };
-  }, [user, connectCurrentUser]);
+  }, [currentUserId, getOrCreateManager]);
+
+  // Listen to browser online/offline transitions cleanly
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const manager = getOrCreateManager();
+
+    const onOffline = () => manager.handleBrowserOffline();
+    const onOnline = () => manager.handleBrowserOnline();
+
+    window.addEventListener("offline", onOffline);
+    window.addEventListener("online", onOnline);
+    return () => {
+      window.removeEventListener("offline", onOffline);
+      window.removeEventListener("online", onOnline);
+    };
+  }, [getOrCreateManager]);
+
+  // Auto-dismiss transient manual reconnect success notice after 5s
+  useEffect(() => {
+    if (managerState.reconnectNotice?.type !== "success") return;
+    const manager = getOrCreateManager();
+    const timer = window.setTimeout(() => {
+      manager.clearReconnectNotice();
+    }, 5000);
+    return () => window.clearTimeout(timer);
+  }, [managerState.reconnectNotice, getOrCreateManager]);
+
+  const reconnect = useCallback(
+    () => getOrCreateManager().manualReconnect(),
+    [getOrCreateManager]
+  );
+
+  const clearReconnectNotice = useCallback(
+    () => getOrCreateManager().clearReconnectNotice(),
+    [getOrCreateManager]
+  );
 
   const value: NexconnContextValue = {
-    status,
-    connected: status === "connected",
-    configured,
-    nexconnUserId,
-    areaCode,
-    error,
-    reconnect: connectCurrentUser,
+    status: managerState.status,
+    connected: managerState.status === "connected",
+    configured: managerState.configured,
+    nexconnUserId: managerState.nexconnUserId,
+    areaCode: managerState.areaCode,
+    error: managerState.error,
+    reconnectAttempt: managerState.reconnectAttempt,
+    maxReconnectAttempts: managerState.maxReconnectAttempts,
+    manualReconnecting: managerState.manualReconnecting,
+    reconnectNotice: managerState.reconnectNotice,
+    reconnect,
+    clearReconnectNotice,
     sendDirectText: sendDirectTextViaNexconn,
     sendReadReceipt: sendDirectReadReceiptViaNexconn,
     deleteMessageForAll: deleteDirectMessageForAllViaNexconn,

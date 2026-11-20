@@ -9,6 +9,7 @@ import {
   reportAccount,
   sendConversationMessage,
   translateMessage,
+  triggerMessageSocketFallback,
 } from "./api";
 import type {
   ChatMessage,
@@ -67,11 +68,34 @@ export async function saveMessageNexconnRef(
   await attachMessageNexconnId(messageId, nexconnMessageId);
 }
 
+export async function broadcastMessageSocketFallback(
+  messageId: string
+): Promise<ChatMessage | undefined> {
+  const res = await triggerMessageSocketFallback(messageId);
+  return res.data;
+}
+
+export interface MarkThreadReadResult {
+  markedCount: number;
+  markedNexconnMessageIds: string[];
+  hasLegacyUnread: boolean;
+}
+
 export async function markThreadRead(
   conversationId: string,
   deliveryTransport?: "nexconn" | "socket"
-): Promise<void> {
-  await markConversationRead(conversationId, deliveryTransport);
+): Promise<MarkThreadReadResult> {
+  const res = await markConversationRead(conversationId, deliveryTransport);
+  const rawIds = Array.isArray(res.markedNexconnMessageIds)
+    ? res.markedNexconnMessageIds
+    : [];
+  return {
+    markedCount: Number(res.markedCount || 0),
+    markedNexconnMessageIds: rawIds.filter(
+      (id): id is string => typeof id === "string" && id.length > 0
+    ),
+    hasLegacyUnread: Boolean(res.hasLegacyUnread),
+  };
 }
 
 export async function removeMessage(

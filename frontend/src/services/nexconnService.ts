@@ -17,6 +17,7 @@ import {
 } from "@nexconn/chat";
 import {
   serializeNexconnExtra,
+  shouldInitializeNexconnSdk,
   type NexconnMessageMetadata,
 } from "../utils/nexconnMessages";
 
@@ -70,7 +71,14 @@ export function initializeNexconnOnce(
     throw new Error("Nexconn App Key is required for initialization.");
   }
 
-  if (initializedAppKey !== null) {
+  if (
+    !shouldInitializeNexconnSdk({
+      currentAppKey: initializedAppKey,
+      currentAreaCode: initializedAreaCode,
+      nextAppKey: appKey,
+      nextAreaCode: areaCode,
+    })
+  ) {
     return;
   }
 
@@ -202,6 +210,7 @@ export async function sendDirectTextViaNexconn(params: {
       ? { extra: serializeNexconnExtra(params.metadata) }
       : {}),
   });
+  messageParams.needReceipt = true;
 
   const res = await channel.sendMessage(messageParams);
   if (res.isOk && res.data) {
@@ -236,29 +245,81 @@ export async function sendDirectReadReceiptViaNexconn(
 
 export async function deleteDirectMessageForAllViaNexconn(
   targetNexconnUserId: string,
-  nexconnMessageId: string
-): Promise<boolean> {
-  if (!targetNexconnUserId || !nexconnMessageId) return false;
+  nexconnMessageId: string,
+  messageCreatedAt?: string
+): Promise<{ isOk: boolean; error?: string }> {
+  if (!targetNexconnUserId || !nexconnMessageId) {
+    return {
+      isOk: false,
+      error: "Missing target user or Nexconn message ID.",
+    };
+  }
   try {
     const channel = new DirectChannel(targetNexconnUserId);
-    const query = BaseChannel.createMessagesQuery({
-      channelIdentifier: channel.identifier,
-      startTime: Date.now() + 60_000,
-      pageSize: 50,
-      isAscending: false,
-    });
-    const historyRes = await query.loadNextPage();
-    if (!historyRes.isOk || !historyRes.data?.data) return false;
+    let target: Message<Record<string, unknown>> | undefined;
 
-    const target = historyRes.data.data.find(
-      (m) => m.messageId === nexconnMessageId
-    );
-    if (!target) return false;
+    // 1. Direct lookup by Nexconn message ID (works regardless of history depth)
+    try {
+      const byIdRes = await BaseChannel.getMessagesByIds({
+        channelIdentifier: channel.identifier,
+        messageIds: [nexconnMessageId],
+      });
+      if (byIdRes.isOk && byIdRes.data) {
+        target = byIdRes.data[nexconnMessageId];
+      }
+    } catch {
+      // Fall through to paginated history query
+    }
+
+    // 2. Paginated history fallback anchored near messageCreatedAt (handles >50 messages)
+    if (!target) {
+      const parsedCreatedMs = messageCreatedAt
+        ? Date.parse(messageCreatedAt)
+        : Number.NaN;
+      const startTime = Number.isFinite(parsedCreatedMs)
+        ? parsedCreatedMs + 60_000
+        : Date.now() + 60_000;
+
+      const query = BaseChannel.createMessagesQuery({
+        channelIdentifier: channel.identifier,
+        startTime,
+        pageSize: 50,
+        isAscending: false,
+      });
+
+      const MAX_PAGES = 20;
+      for (let page = 0; page < MAX_PAGES; page++) {
+        const historyRes = await query.loadNextPage();
+        if (!historyRes.isOk || !historyRes.data?.data) break;
+
+        target = historyRes.data.data.find(
+          (m) => m.messageId === nexconnMessageId
+        );
+        if (target || !query.hasNext) break;
+      }
+    }
+
+    if (!target) {
+      return {
+        isOk: false,
+        error: "Message could not be located in Nexconn channel history.",
+      };
+    }
 
     const delRes = await channel.deleteMessageForAll(target);
-    return Boolean(delRes.isOk);
-  } catch {
-    return false;
+    if (!delRes.isOk) {
+      return {
+        isOk: false,
+        error: `Nexconn recall failed (code ${delRes.code}).`,
+      };
+    }
+    return { isOk: true };
+  } catch (err) {
+    return {
+      isOk: false,
+      error:
+        err instanceof Error ? err.message : "Nexconn message recall failed.",
+    };
   }
 }
 

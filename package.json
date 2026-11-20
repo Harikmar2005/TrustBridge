@@ -15,7 +15,7 @@
     "build": "npm run build:frontend && npm run build:backend",
     "build:frontend": "npm run build --workspace=frontend",
     "build:backend": "npm run build --workspace=backend",
-    "typecheck": "npm run typecheck --workspace=backend && tsc -b frontend/tsconfig.json",
+    "typecheck": "npm run typecheck --workspace=backend && npm run typecheck --workspace=frontend",
     "start": "npm run start --workspace=backend",
     "provision:admin": "npm run provision:admin --workspace=backend",
     "test": "npx --yes tsx --test backend/src/services/*.test.ts backend/src/config/*.test.ts frontend/src/utils/*.test.ts && npx --yes tsx backend/tests/test_all.ts",
